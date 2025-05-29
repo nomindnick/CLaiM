@@ -124,9 +124,10 @@ async def update_privacy_mode(mode: str) -> Dict[str, Any]:
         )
 
 
-# TODO: Import and include routers from modules
-# from backend.modules.document_processor.router import router as document_router
-# app.include_router(document_router, prefix=f"{settings.api_prefix}/documents")
+# Import and include routers from modules
+from backend.modules.document_processor.router import router as document_router
+
+app.include_router(document_router, prefix=f"{settings.api_prefix}/documents", tags=["documents"])
 
 # Error handlers
 @app.exception_handler(ValueError)
