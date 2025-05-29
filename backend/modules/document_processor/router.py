@@ -208,7 +208,8 @@ async def list_documents(
         
         if document_type:
             try:
-                filter.document_type = StorageDocType(document_type)
+                # The SearchFilter expects a list of document_types, not a single document_type
+                filter.document_types = [StorageDocType(document_type)]
             except ValueError:
                 raise HTTPException(
                     status_code=400,
@@ -234,7 +235,7 @@ async def list_documents(
                 }
                 for doc in results.documents
             ],
-            "total": results.total_results,
+            "total": results.total_count,
             "limit": limit,
             "offset": offset
         }

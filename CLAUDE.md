@@ -95,13 +95,13 @@ gh pr create  # Create pull request
    - ✅ FastAPI routes for upload/processing
    - ✅ OCR integration with pytesseract (COMPLETED)
    - ⬜ DistilBERT integration for classification
-   - ⬜ Advanced metadata extraction
+   - ✅ Advanced metadata extraction (COMPLETED)
 3. ✅ Storage module with SQLite (COMPLETED)
-4. 🟡 Basic web UI with document browser (STARTED)
+4. 🟡 Basic web UI with document browser (IN PROGRESS)
    - ✅ React TypeScript setup with Vite
    - ✅ Privacy mode indicator
-   - ⬜ Document upload interface
-   - ⬜ Document list view
+   - ✅ Document upload interface (COMPLETED)
+   - ✅ Document list view (COMPLETED)
 
 ### Implementation Order
 1. **Document Processor** → IN PROGRESS - OCR and classification next
@@ -122,15 +122,19 @@ gh pr create  # Create pull request
    - ✅ Full-text search with FTS5
    - ✅ CRUD operations with relationships
 6. ✅ ~~Fix FTS5 trigger issues in SQLite for reliable search (COMPLETED)~~
-7. ⬜ Implement metadata extraction module
-   - Extract dates, parties, amounts from documents
-   - Build construction-specific patterns
+7. ✅ ~~Implement metadata extraction module~~
+   - ✅ Extract dates, parties, amounts from documents
+   - ✅ Build construction-specific patterns
 8. ⬜ Set up AI Classifier module structure
    - DistilBERT model loading
    - Document type classification
    - Confidence scoring
-9. ⬜ Build document upload UI in frontend
-10. ⬜ Connect frontend to backend API
+9. ✅ ~~Build document upload UI in frontend~~
+10. ✅ ~~Connect frontend to backend API~~
+11. ✅ ~~Implement document list view with sorting/filtering~~
+12. ⬜ Implement document detail view
+13. ⬜ Add grid view for documents
+14. ⬜ Implement search functionality
 
 ## Testing Strategy
 - **Unit tests**: Every public method, aim for 80% coverage
@@ -268,6 +272,14 @@ storage.save(document, embeddings)
   - Updated background processing to save each extracted document to SQLite
   - Added pagination and filtering support to document list endpoint
   - Created test_pipeline.py script to verify complete upload->process->store->retrieve flow
+- [2025-05-29] Implemented Document List View in Frontend:
+  - Created DocumentList component with comprehensive table display
+  - Added sorting for date, type, title, and page count columns
+  - Implemented multi-select filtering by document type with color-coded badges
+  - Added text search, party filter dropdown, and collapsible filter panel
+  - Implemented pagination with page navigation controls
+  - Styled with professional UI suitable for attorneys
+  - Fixed backend API bugs (SearchResult.total_count and document_types filter)
 
 ## Debug Commands
 ```bash

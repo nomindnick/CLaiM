@@ -1,5 +1,6 @@
 import React, { useState } from 'react'
 import { DocumentUpload } from './DocumentUpload'
+import { DocumentList } from './DocumentList'
 import { FolderOpen, Upload, Grid, List } from 'lucide-react'
 
 type ViewMode = 'upload' | 'list' | 'grid'
@@ -138,19 +139,7 @@ export const DocumentBrowser: React.FC = () => {
           </div>
         )}
 
-        {viewMode === 'list' && (
-          <div className="p-6">
-            <div className="bg-white rounded-lg shadow-sm p-8 text-center">
-              <FolderOpen className="w-16 h-16 text-gray-400 mx-auto mb-4" />
-              <h3 className="text-lg font-medium text-gray-900 mb-2">
-                Document List View
-              </h3>
-              <p className="text-gray-600">
-                Document list view will be implemented here.
-              </p>
-            </div>
-          </div>
-        )}
+        {viewMode === 'list' && <DocumentList />}
 
         {viewMode === 'grid' && (
           <div className="p-6">
