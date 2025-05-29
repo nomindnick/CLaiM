@@ -24,8 +24,8 @@ class PDFSplitter:
     """Splits large PDF files into individual logical documents."""
     
     def __init__(self):
-        self.boundary_detector = BoundaryDetector()
         self.ocr_handler = None  # Lazy initialization
+        self.boundary_detector = None  # Will be initialized when OCR handler is ready
     
     def process_pdf(self, request: PDFProcessingRequest) -> ProcessingResult:
         """Process a PDF file and extract individual documents.
@@ -56,6 +56,17 @@ class PDFSplitter:
             result.total_pages = pdf_doc.page_count
             
             logger.info(f"Processing PDF: {request.file_path.name} ({result.total_pages} pages)")
+            
+            # Initialize OCR handler if needed (for boundary detection on scanned docs)
+            if request.perform_ocr and self.ocr_handler is None:
+                self.ocr_handler = OCRHandler(
+                    language=request.ocr_language,
+                    min_confidence=0.3  # Lower threshold for boundary detection
+                )
+            
+            # Initialize boundary detector with OCR handler
+            if self.boundary_detector is None:
+                self.boundary_detector = BoundaryDetector(ocr_handler=self.ocr_handler)
             
             if request.split_documents:
                 # Detect document boundaries

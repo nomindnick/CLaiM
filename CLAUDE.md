@@ -125,16 +125,27 @@ gh pr create  # Create pull request
 7. ✅ ~~Implement metadata extraction module~~
    - ✅ Extract dates, parties, amounts from documents
    - ✅ Build construction-specific patterns
-8. ⬜ Set up AI Classifier module structure
+8. ✅ ~~Enhanced boundary detection for scanned documents~~
+   - ✅ Construction-specific OCR patterns
+   - ✅ Document transition detection
+9. ⬜ Set up AI Classifier module structure
    - DistilBERT model loading
    - Document type classification
    - Confidence scoring
-9. ✅ ~~Build document upload UI in frontend~~
-10. ✅ ~~Connect frontend to backend API~~
-11. ✅ ~~Implement document list view with sorting/filtering~~
-12. ⬜ Implement document detail view
-13. ⬜ Add grid view for documents
-14. ⬜ Implement search functionality
+10. ✅ ~~Build document upload UI in frontend~~
+11. ✅ ~~Connect frontend to backend API~~
+12. ✅ ~~Implement document list view with sorting/filtering~~
+13. ⬜ Implement AI-based boundary detection (Phase 1)
+    - Visual similarity using CLIP/Sentence Transformers
+    - Page layout change detection
+    - Hybrid approach with pattern matching
+14. ⬜ Implement manual boundary adjustment UI
+    - Document split/merge functionality
+    - Reclassification interface
+    - Bulk operations support
+15. ⬜ Implement document detail view
+16. ⬜ Add grid view for documents
+17. ⬜ Implement search functionality
 
 ## Testing Strategy
 - **Unit tests**: Every public method, aim for 80% coverage
@@ -190,6 +201,9 @@ storage.save(document, embeddings)
 - **Table extraction**: Construction schedules are complex, may need manual review
 - **Date parsing**: Multiple formats in use, normalize to ISO 8601
 - **Party name variations**: "ABC Corp" vs "ABC Corporation" - implement fuzzy matching
+- **Poor boundary detection with scanned PDFs**: Current pattern matching struggles with OCR errors
+  - Workaround: Implementing AI-based visual boundary detection
+  - Workaround: Adding manual boundary adjustment UI
 
 ## Performance Targets
 - Document classification: <100ms per document
@@ -280,6 +294,17 @@ storage.save(document, embeddings)
   - Implemented pagination with page navigation controls
   - Styled with professional UI suitable for attorneys
   - Fixed backend API bugs (SearchResult.total_count and document_types filter)
+- [2025-05-29] Enhanced Document Boundary Detection for Scanned PDFs:
+  - Improved boundary_detector.py with construction-specific patterns
+  - Added support for OCR during boundary detection (not just after)
+  - Created construction_patterns.py with OCR-friendly pattern matching
+  - Enhanced email detection with flexible patterns for OCR errors
+  - Added form structure detection and visual cue analysis
+  - Implemented document transition detection (email->form, text density changes)
+  - Added post-processing to merge related documents (continuation sheets, email threads)
+  - Improved OCR preprocessing specifically for construction documents
+  - Fixed image conversion issues and added comprehensive error handling
+  - Lowered OCR confidence thresholds for boundary detection while maintaining quality standards
 
 ## Debug Commands
 ```bash
@@ -351,15 +376,96 @@ curl -X POST "http://localhost:8000/api/v1/metadata/extract" \
    - ✅ Transaction management with WAL mode
 
 ### Priority 3: Frontend Document Browser
-1. **Upload Component** (`frontend/src/components/document-browser/`)
-   - Drag-and-drop PDF upload
-   - Upload progress indicator
-   - File validation
+1. ✅ **Upload Component** (`frontend/src/components/document-browser/`) - COMPLETED
+   - ✅ Drag-and-drop PDF upload
+   - ✅ Upload progress indicator
+   - ✅ File validation
    
-2. **Document List** 
-   - Table view with sorting/filtering
-   - Document type badges
-   - Quick preview on hover
+2. ✅ **Document List** - COMPLETED
+   - ✅ Table view with sorting/filtering
+   - ✅ Document type badges
+   - ⬜ Quick preview on hover
+
+### Priority 4: AI-Based Boundary Detection (NEW)
+1. **Phase 1: Visual Similarity Detection**
+   - Implement page embedding using CLIP or Sentence Transformers
+   - Calculate similarity between consecutive pages
+   - Detect boundaries when similarity drops below threshold
+   - Cache embeddings for performance
+
+2. **Phase 2: LayoutLM Integration**
+   - Use LayoutLMv3 for document understanding
+   - Combine visual and textual features
+   - Train boundary classifier on construction documents
+   - Handle mixed quality scans
+
+3. **Phase 3: Custom Construction Model**
+   - Collect training data from actual construction litigation PDFs
+   - Fine-tune model for construction-specific patterns
+   - Detect stamps, signatures, letterheads
+   - Recognize form transitions vs continuous text
+
+### Priority 5: Manual Boundary Adjustment UI (NEW)
+1. **Document Editor Interface**
+   - Visual page thumbnail view
+   - Drag-and-drop boundary adjustment
+   - Split document at any page
+   - Merge adjacent documents
+   - Preview changes before saving
+
+2. **Reclassification Tools**
+   - Quick type reassignment
+   - Bulk operations for multiple documents
+   - Confidence indicators for AI suggestions
+   - Undo/redo functionality
+
+3. **Attorney-Friendly Features**
+   - Clear visual indicators for document boundaries
+   - Tooltips explaining AI decisions
+   - Keyboard shortcuts for power users
+   - Export boundary decisions for review
+
+## AI Boundary Detection Implementation Guide
+
+### Phase 1: Visual Similarity (Quick Win)
+```python
+# backend/modules/document_processor/visual_boundary_detector.py
+from sentence_transformers import SentenceTransformer
+from sklearn.metrics.pairwise import cosine_similarity
+
+class VisualBoundaryDetector:
+    def __init__(self):
+        self.model = SentenceTransformer('clip-ViT-B-32')
+        self.similarity_threshold = 0.7
+    
+    def detect_boundaries(self, pdf_doc):
+        # Convert pages to images and get embeddings
+        # Compare consecutive pages
+        # Mark boundaries where similarity < threshold
+```
+
+### Phase 2: LayoutLM Integration
+- Use `microsoft/layoutlmv3-base` for document understanding
+- Combine OCR text positions with visual features
+- Fine-tune on construction document boundaries
+- Handle stamps, signatures, and form transitions
+
+### Phase 3: Manual Adjustment UI
+```typescript
+// frontend/src/components/document-browser/BoundaryEditor.tsx
+interface BoundaryEditorProps {
+  documents: Document[]
+  onBoundaryChange: (newBoundaries: number[]) => void
+  onTypeChange: (docId: string, newType: DocumentType) => void
+}
+
+// Features:
+// - Thumbnail strip with visual boundaries
+// - Drag to adjust boundaries
+// - Right-click to split/merge
+// - Confidence indicators
+// - Undo/redo support
+```
 
 ## Notes for Claude Code
 - This is a legal tool - accuracy and auditability are paramount
@@ -369,3 +475,5 @@ curl -X POST "http://localhost:8000/api/v1/metadata/extract" \
 - Test with realistic construction litigation scenarios
 - Update this file's "Recently Completed Tasks" section after major work
 - Focus on getting core document processing working end-to-end before adding AI features
+- For AI boundary detection: Start with visual similarity, then add LayoutLM, finally custom training
+- Manual boundary adjustment is critical - attorneys need final control over document splits

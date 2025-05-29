@@ -5,6 +5,7 @@ This module handles optical character recognition for scanned pages commonly fou
 in construction documents like faxed RFIs, scanned change orders, and old permits.
 """
 
+import io
 import logging
 from typing import Optional, Tuple, Dict, Any
 import numpy as np
@@ -29,7 +30,7 @@ class OCRHandler:
     - Multi-generation photocopies
     """
     
-    def __init__(self, language: str = "eng", min_confidence: float = 0.6):
+    def __init__(self, language: str = "eng", min_confidence: float = 0.4):
         """
         Initialize OCR handler.
         
@@ -40,6 +41,9 @@ class OCRHandler:
         self.language = language
         self.min_confidence = min_confidence
         self._verify_tesseract()
+        
+        # Construction document-specific settings
+        self.construction_mode = True  # Enable construction-specific optimizations
         
     def _verify_tesseract(self) -> None:
         """Verify Tesseract is installed and accessible."""
@@ -83,13 +87,24 @@ class OCRHandler:
     
     def _page_to_image(self, page: fitz.Page, dpi: int) -> Image.Image:
         """Convert PDF page to PIL Image."""
-        # Render page to pixmap
-        mat = fitz.Matrix(dpi/72.0, dpi/72.0)
-        pix = page.get_pixmap(matrix=mat)
-        
-        # Convert to PIL Image
-        img_data = pix.tobytes("ppm")
-        return Image.open(io.BytesIO(img_data))
+        try:
+            # Render page to pixmap
+            mat = fitz.Matrix(dpi/72.0, dpi/72.0)
+            pix = page.get_pixmap(matrix=mat)
+            
+            # Convert pixmap to PIL Image
+            # Method 1: Direct conversion
+            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+            return img
+        except Exception as e:
+            logger.error(f"Failed to convert page to image: {str(e)}")
+            # Try alternative method
+            try:
+                img_data = pix.tobytes("png")
+                return Image.open(io.BytesIO(img_data))
+            except Exception as e2:
+                logger.error(f"Alternative conversion also failed: {str(e2)}")
+                raise
     
     def _preprocess_image(self, image: Image.Image) -> Image.Image:
         """
@@ -109,21 +124,51 @@ class OCRHandler:
         cv_image = np.array(image)
         
         # 1. Denoise - especially important for faxed documents
-        cv_image = cv2.fastNlMeansDenoising(cv_image, h=30)
+        # Use stronger denoising for construction documents
+        if self.construction_mode:
+            cv_image = cv2.fastNlMeansDenoising(cv_image, h=40)  # Stronger denoising
+        else:
+            cv_image = cv2.fastNlMeansDenoising(cv_image, h=30)
         
         # 2. Deskew - fix tilted scans
         cv_image = self._deskew_image(cv_image)
         
-        # 3. Binarization - convert to pure black and white
-        # Use adaptive thresholding for documents with varying lighting
-        cv_image = cv2.adaptiveThreshold(
-            cv_image, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-            cv2.THRESH_BINARY, 11, 2
-        )
+        # 3. For construction docs, try to enhance contrast first
+        if self.construction_mode:
+            # Apply CLAHE (Contrast Limited Adaptive Histogram Equalization)
+            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+            cv_image = clahe.apply(cv_image)
         
-        # 4. Remove small noise particles
+        # 4. Binarization - convert to pure black and white
+        # Use adaptive thresholding for documents with varying lighting
+        if self.construction_mode:
+            # Try multiple thresholding methods and pick the best
+            _, otsu = cv2.threshold(cv_image, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            adaptive = cv2.adaptiveThreshold(
+                cv_image, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                cv2.THRESH_BINARY, 15, 3  # Larger block size for construction docs
+            )
+            # Use OTSU if it produces cleaner results
+            cv_image = otsu if np.mean(otsu) > np.mean(adaptive) else adaptive
+        else:
+            cv_image = cv2.adaptiveThreshold(
+                cv_image, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                cv2.THRESH_BINARY, 11, 2
+            )
+        
+        # 5. Remove small noise particles
         kernel = np.ones((2, 2), np.uint8)
         cv_image = cv2.morphologyEx(cv_image, cv2.MORPH_CLOSE, kernel)
+        
+        # 6. For construction docs, also try to remove lines (common in forms)
+        if self.construction_mode:
+            # Remove horizontal lines
+            horizontal_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (40, 1))
+            detected_lines = cv2.morphologyEx(cv_image, cv2.MORPH_OPEN, horizontal_kernel, iterations=2)
+            cnts = cv2.findContours(detected_lines, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            cnts = cnts[0] if len(cnts) == 2 else cnts[1]
+            for c in cnts:
+                cv2.drawContours(cv_image, [c], -1, (255,255,255), 2)
         
         # Convert back to PIL
         processed = Image.fromarray(cv_image)
@@ -171,7 +216,12 @@ class OCRHandler:
             Tuple of (text, average_confidence)
         """
         # Configure Tesseract for construction documents
-        custom_config = r'--oem 3 --psm 3'  # Use best OCR engine mode and auto page segmentation
+        if self.construction_mode:
+            # PSM 6: Uniform block of text - good for forms and structured documents
+            # Also add construction-specific character whitelist
+            custom_config = r'--oem 3 --psm 6 -c tessedit_char_blacklist=¢£¤¥§©®°±µ¶·¸¹º»¼½¾¿×÷'
+        else:
+            custom_config = r'--oem 3 --psm 3'  # Use best OCR engine mode and auto page segmentation
         
         # Get detailed OCR data including confidence scores
         ocr_data = pytesseract.image_to_data(
@@ -223,6 +273,7 @@ class OCRHandler:
         
         # Common construction abbreviation fixes
         replacements = {
+            # Document types
             r'\bRF[Il1]\b': 'RFI',  # Request for Information
             r'\bC[O0]\b': 'CO',     # Change Order
             r'\bAS[Il1]\b': 'ASI',  # Architect's Supplemental Instruction
@@ -230,6 +281,39 @@ class OCRHandler:
             r'\bCCD\b': 'CCD',      # Construction Change Directive
             r'\bSUBM[Il1]TTAL\b': 'SUBMITTAL',
             r'\b[Il1]NVOICE\b': 'INVOICE',
+            r'\bP[O0]\b': 'PO',     # Purchase Order
+            
+            # California-specific terms
+            r'\bDSA\b': 'DSA',      # Division of State Architect
+            r'\bD[Il1]R\b': 'DIR',  # Department of Industrial Relations
+            r'\bPWC\b': 'PWC',      # Prevailing Wage Certification
+            
+            # Construction terms often misread
+            r'\bGEN[E3]RAL\s+C[O0]NTRACT[O0]R\b': 'GENERAL CONTRACTOR',
+            r'\bSUBC[O0]NTRACT[O0]R\b': 'SUBCONTRACTOR',
+            r'\bARCH[Il1]TECT\b': 'ARCHITECT',
+            r'\bENG[Il1]NEER\b': 'ENGINEER',
+            r'\bC[O0]NSTRUCT[Il1][O0]N\b': 'CONSTRUCTION',
+            r'\bBU[Il1]LD[Il1]NG\b': 'BUILDING',
+            r'\bPR[O0]JECT\b': 'PROJECT',
+            
+            # Common date/number fixes
+            r'\b[O0]1[/\-]': '01/',
+            r'\b[O0]2[/\-]': '02/',
+            r'\b[O0]3[/\-]': '03/',
+            r'\b[O0]4[/\-]': '04/',
+            r'\b[O0]5[/\-]': '05/',
+            r'\b[O0]6[/\-]': '06/',
+            r'\b[O0]7[/\-]': '07/',
+            r'\b[O0]8[/\-]': '08/',
+            r'\b[O0]9[/\-]': '09/',
+            r'\b1[O0][/\-]': '10/',
+            r'\b2[O0]2[O0]\b': '2020',
+            r'\b2[O0]21\b': '2021',
+            r'\b2[O0]22\b': '2022',
+            r'\b2[O0]23\b': '2023',
+            r'\b2[O0]24\b': '2024',
+            r'\b2[O0]25\b': '2025',
         }
         
         import re
@@ -281,5 +365,3 @@ class OCRHandler:
             return ['eng']  # Default to English
 
 
-# Import for BytesIO
-import io
