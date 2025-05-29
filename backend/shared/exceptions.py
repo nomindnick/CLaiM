@@ -50,3 +50,8 @@ class PrivacyError(CLaiMException):
 class ValidationError(CLaiMException):
     """Raised when input validation fails."""
     pass
+
+
+class OCRError(DocumentProcessingError):
+    """Raised when OCR processing fails."""
+    pass

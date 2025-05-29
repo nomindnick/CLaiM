@@ -8,7 +8,7 @@ from typing import List, Optional, Tuple
 import fitz  # PyMuPDF
 from loguru import logger
 
-from backend.shared.exceptions import PDFExtractionError
+from backend.shared.exceptions import PDFExtractionError, OCRError
 from .models import (
     Document,
     DocumentPage,
@@ -17,6 +17,7 @@ from .models import (
     PDFProcessingRequest,
 )
 from .boundary_detector import BoundaryDetector
+from .ocr_handler import OCRHandler
 
 
 class PDFSplitter:
@@ -24,6 +25,7 @@ class PDFSplitter:
     
     def __init__(self):
         self.boundary_detector = BoundaryDetector()
+        self.ocr_handler = None  # Lazy initialization
     
     def process_pdf(self, request: PDFProcessingRequest) -> ProcessingResult:
         """Process a PDF file and extract individual documents.
@@ -151,10 +153,43 @@ class PDFSplitter:
             # Check if page is scanned (no text extracted)
             is_scanned = len(text.strip()) < 10  # Arbitrary threshold
             
+            confidence = 1.0  # Default confidence for non-OCR text
+            
             if is_scanned and request.perform_ocr:
-                # TODO: Implement OCR using pytesseract
-                # For now, just mark as scanned
-                text = "[OCR needed]"
+                # Initialize OCR handler if needed
+                if self.ocr_handler is None:
+                    self.ocr_handler = OCRHandler(
+                        language=request.ocr_language,
+                        min_confidence=request.min_confidence
+                    )
+                
+                try:
+                    # Perform OCR
+                    ocr_text, ocr_confidence = self.ocr_handler.process_page(page)
+                    
+                    if ocr_text and ocr_confidence >= request.min_confidence:
+                        text = ocr_text
+                        confidence = ocr_confidence
+                        logger.info(
+                            f"OCR successful for page {page_num + 1} "
+                            f"(confidence: {confidence:.2f})"
+                        )
+                    else:
+                        text = "[OCR failed - low confidence]"
+                        confidence = ocr_confidence
+                        logger.warning(
+                            f"OCR failed for page {page_num + 1} - "
+                            f"confidence {ocr_confidence:.2f} below threshold"
+                        )
+                        
+                except OCRError as e:
+                    logger.error(f"OCR error on page {page_num + 1}: {e}")
+                    text = "[OCR failed - error]"
+                    confidence = 0.0
+                except Exception as e:
+                    logger.error(f"Unexpected OCR error on page {page_num + 1}: {e}")
+                    text = "[OCR failed - unexpected error]"
+                    confidence = 0.0
             
             # Check for tables and images
             has_tables = self._detect_tables(page)
@@ -166,6 +201,7 @@ class PDFSplitter:
                 is_scanned=is_scanned,
                 has_tables=has_tables,
                 has_images=has_images,
+                confidence=confidence,
             )
             
             pages.append(doc_page)
