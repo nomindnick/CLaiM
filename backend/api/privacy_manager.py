@@ -21,7 +21,7 @@ class PrivacyManager:
     """Manages privacy modes and routes AI operations accordingly."""
     
     def __init__(self):
-        self.current_mode = settings.default_privacy_mode
+        self.current_mode = settings.privacy_mode
         self._sensitive_patterns = [
             "ssn", "social security",
             "tax id", "ein",

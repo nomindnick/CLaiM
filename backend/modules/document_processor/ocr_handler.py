@@ -13,7 +13,7 @@ import pytesseract
 import cv2
 import fitz  # PyMuPDF
 
-from backend.shared.exceptions import OCRError
+from shared.exceptions import OCRError
 
 logger = logging.getLogger(__name__)
 

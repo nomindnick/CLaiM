@@ -96,7 +96,7 @@ gh pr create  # Create pull request
    - ✅ OCR integration with pytesseract (COMPLETED)
    - ⬜ DistilBERT integration for classification
    - ⬜ Advanced metadata extraction
-3. ⬜ Storage module with SQLite
+3. ✅ Storage module with SQLite (COMPLETED)
 4. 🟡 Basic web UI with document browser (STARTED)
    - ✅ React TypeScript setup with Vite
    - ✅ Privacy mode indicator
@@ -116,17 +116,21 @@ gh pr create  # Create pull request
 1. ✅ ~~Initial project structure setup, git initialization~~
 2. ✅ ~~Implement `PDFSplitter` class~~
 3. ✅ ~~Implement OCR for scanned pages in `document_processor/ocr_handler.py`~~
-4. ⬜ Create sample construction PDFs for testing
-5. ⬜ Implement Storage module with SQLite
-   - Document storage schema
-   - Full-text search with FTS5
-   - CRUD operations
-6. ⬜ Set up AI Classifier module structure
+4. ✅ ~~Create sample construction PDFs for testing~~
+5. ✅ ~~Implement Storage module with SQLite (COMPLETED)~~
+   - ✅ Document storage schema with versioning
+   - ✅ Full-text search with FTS5
+   - ✅ CRUD operations with relationships
+6. ✅ ~~Fix FTS5 trigger issues in SQLite for reliable search (COMPLETED)~~
+7. ⬜ Implement metadata extraction module
+   - Extract dates, parties, amounts from documents
+   - Build construction-specific patterns
+8. ⬜ Set up AI Classifier module structure
    - DistilBERT model loading
    - Document type classification
    - Confidence scoring
-7. ⬜ Build document upload UI in frontend
-8. ⬜ Connect frontend to backend API
+9. ⬜ Build document upload UI in frontend
+10. ⬜ Connect frontend to backend API
 
 ## Testing Strategy
 - **Unit tests**: Every public method, aim for 80% coverage
@@ -216,6 +220,54 @@ storage.save(document, embeddings)
   - Added post-processing for construction-specific terms and date formats
   - Created comprehensive test suite with 13 passing tests
   - Updated PDF splitter to use OCR handler for scanned pages
+- [2025-05-29] Implemented Storage Module with SQLite:
+  - Created comprehensive data models (StoredDocument, StoredPage, DocumentMetadata)
+  - Implemented SQLite handler with FTS5 full-text search
+  - Added document relationships (responds_to, references, related)
+  - Created storage manager for coordinating file system and database storage
+  - Implemented search with filters (text, type, date range, parties)
+  - Added FastAPI routes for storage operations
+  - Created test suite and verification scripts
+- [2025-05-29] Created Test Construction PDFs:
+  - Generated realistic construction documents (RFIs, Change Orders, Daily Reports, Invoices)
+  - Created mixed text/scanned document for OCR testing
+  - Implemented PDF generation script using reportlab
+  - Added 13 test documents covering common construction litigation document types
+- [2025-05-29] Implemented Integration Testing:
+  - Created comprehensive test suite for document processing pipeline
+  - Tests cover PDF processing, storage, search, and metadata extraction
+  - Fixed module import paths throughout backend for proper testing
+  - Identified and partially resolved FTS5 trigger issues in SQLite
+- [2025-05-29] Fixed FTS5 Trigger Issues:
+  - Resolved "no such column: T.parties" error in SQLite FTS5
+  - Removed problematic json_extract triggers
+  - Implemented manual FTS population in save_document method
+  - Fixed FTS table definition to not use content=documents
+  - All search functionality tests now passing
+- [2025-05-29] Implemented Metadata Extraction Module:
+  - Created comprehensive pattern matching for dates, parties, amounts, and references
+  - Built entity normalization for consistent party names and deduplication
+  - Integrated with storage module to automatically extract metadata on document storage
+  - Added construction-specific patterns (RFI numbers, change orders, invoices, etc.)
+  - Created party role detection (contractor, owner, architect, etc.)
+  - Implemented keyword extraction for litigation-relevant terms
+  - Added API endpoints for metadata extraction and party normalization
+  - Created test suite and demonstration scripts
+- [2025-05-29] Implemented Frontend Document Upload Component:
+  - Created DocumentUpload component with drag-and-drop using react-dropzone
+  - Built DocumentBrowser component with view modes (upload/list/grid)
+  - Added file validation, upload progress tracking, and error handling
+  - Integrated with backend API for document upload
+  - Updated main App with navigation between home and documents views
+  - Added visual feedback for upload states (pending, uploading, processing, success, error)
+  - Created upload guidelines and instructions for attorneys
+- [2025-05-29] Fixed Document Processing Pipeline Integration:
+  - Connected document processor to storage module in background processing
+  - Integrated metadata extraction into the storage process
+  - Added API endpoints to list and retrieve stored documents
+  - Updated background processing to save each extracted document to SQLite
+  - Added pagination and filtering support to document list endpoint
+  - Created test_pipeline.py script to verify complete upload->process->store->retrieve flow
 
 ## Debug Commands
 ```bash
@@ -225,8 +277,29 @@ curl http://localhost:8000/health
 # Test document processor
 python -m pytest backend/modules/document_processor/tests/ -v
 
+# Test storage module
+python scripts/test_sqlite_direct.py
+
+# Test metadata extraction
+python scripts/test_metadata_extraction.py
+
+# Run integration tests
+python -m pytest tests/integration/test_document_processing_pipeline.py -v
+
+# Generate test PDFs
+python tests/test_data/generate_test_pdfs.py
+
+# Test complete pipeline (upload -> process -> store -> retrieve)
+python scripts/test_pipeline.py
+
 # Check current privacy mode
 curl http://localhost:8000/api/v1/privacy
+
+# Test metadata extraction API
+curl -X POST "http://localhost:8000/api/v1/metadata/extract" \
+  -H "accept: application/json" \
+  -H "Content-Type: multipart/form-data" \
+  -F "file=@tests/test_data/RFI_123.pdf"
 
 # Future: Check model loading (not yet implemented)
 # python -c "from backend.modules.ai_interface.model_manager import ModelManager; ModelManager().status()"
@@ -249,21 +322,21 @@ curl http://localhost:8000/api/v1/privacy
    - ✅ Implemented confidence scoring
    - ✅ Handle mixed text/scanned documents
    
-2. **Metadata Extraction** (`metadata_extractor/` module)
-   - Extract dates, parties, amounts from documents
-   - Use regex patterns for common formats
-   - Build party name normalization
+2. ✅ **Metadata Extraction** (`metadata_extractor/` module) - COMPLETED
+   - ✅ Extract dates, parties, amounts from documents
+   - ✅ Use regex patterns for common formats
+   - ✅ Build party name normalization
 
-### Priority 2: Storage Module
-1. **SQLite Schema** (`storage/models.py`)
-   - Design document storage tables
-   - Implement FTS5 for full-text search
-   - Add version tracking for documents
+### Priority 2: Storage Module - COMPLETED ✅
+1. **SQLite Schema** (`storage/models.py`) - COMPLETED
+   - ✅ Designed document storage tables with metadata
+   - ✅ Implemented FTS5 for full-text search
+   - ✅ Added version tracking and timestamps
    
-2. **Storage Operations** (`storage/sqlite_handler.py`)
-   - CRUD operations for documents
-   - Batch insert for performance
-   - Transaction management
+2. **Storage Operations** (`storage/sqlite_handler.py`) - COMPLETED
+   - ✅ CRUD operations for documents and pages
+   - ✅ Batch operations support
+   - ✅ Transaction management with WAL mode
 
 ### Priority 3: Frontend Document Browser
 1. **Upload Component** (`frontend/src/components/document-browser/`)

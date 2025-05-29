@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     # Application
     app_name: str = "CLaiM"
     app_version: str = "0.1.0"
+    environment: str = "development"
     debug: bool = True
     log_level: str = "INFO"
     
@@ -42,6 +43,7 @@ class Settings(BaseSettings):
     embeddings_model: str = "all-MiniLM-L6-v2.gguf"
     
     # Privacy
+    privacy_mode: PrivacyMode = PrivacyMode.FULL_LOCAL
     default_privacy_mode: PrivacyMode = PrivacyMode.FULL_LOCAL
     
     # API Keys (optional)
@@ -50,6 +52,7 @@ class Settings(BaseSettings):
     
     # File storage
     upload_dir: Path = Path("./uploads")
+    storage_dir: Path = Path("./storage")
     max_upload_size: int = 104857600  # 100MB
     allowed_extensions: List[str] = ["pdf", "png", "jpg", "jpeg"]
     
@@ -72,8 +75,14 @@ class Settings(BaseSettings):
         super().__init__(**kwargs)
         # Ensure directories exist
         self.upload_dir.mkdir(exist_ok=True, parents=True)
+        self.storage_dir.mkdir(exist_ok=True, parents=True)
         self.models_dir.mkdir(exist_ok=True, parents=True)
 
 
 # Global settings instance
 settings = Settings()
+
+
+def get_settings() -> Settings:
+    """Get application settings."""
+    return settings

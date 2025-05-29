@@ -8,7 +8,7 @@ from typing import List, Optional, Tuple
 import fitz  # PyMuPDF
 from loguru import logger
 
-from backend.shared.exceptions import PDFExtractionError, OCRError
+from shared.exceptions import PDFExtractionError, OCRError
 from .models import (
     Document,
     DocumentPage,

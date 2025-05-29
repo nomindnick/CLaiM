@@ -3,26 +3,29 @@
 import shutil
 import uuid
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 from fastapi import APIRouter, File, HTTPException, UploadFile, BackgroundTasks
 from fastapi.responses import JSONResponse
 from loguru import logger
 
-from backend.api.config import settings
-from backend.shared.exceptions import DocumentProcessingError
+from api.config import settings
+from shared.exceptions import DocumentProcessingError
 from .models import ProcessingResult, PDFProcessingRequest
 from .pdf_splitter import PDFSplitter
+from modules.storage.storage_manager import StorageManager
+from modules.metadata_extractor.extractor import MetadataExtractor
 
 
 router = APIRouter(
-    prefix="/documents",
     tags=["documents"],
     responses={404: {"description": "Not found"}},
 )
 
-# Initialize PDF splitter
+# Initialize services
 pdf_splitter = PDFSplitter()
+storage_manager = StorageManager()
+metadata_extractor = MetadataExtractor()
 
 
 @router.post("/upload", response_model=dict)
@@ -46,8 +49,9 @@ async def upload_document(
             detail="Only PDF files are supported"
         )
     
-    # Check file size
-    if file.size and file.size > settings.max_upload_size:
+    # Check file size (if available)
+    # Note: file.size might be None for streaming uploads
+    if file.size is not None and file.size > settings.max_upload_size:
         raise HTTPException(
             status_code=413,
             detail=f"File too large. Maximum size is {settings.max_upload_size / 1024 / 1024}MB"
@@ -75,10 +79,12 @@ async def upload_document(
         
         return {
             "message": "File uploaded successfully",
+            "document_id": file_id,  # Frontend expects document_id
             "file_id": file_id,
             "job_id": job_id,
             "filename": file.filename,
             "size": file.size,
+            "status": "processing"
         }
         
     except Exception as e:
@@ -175,6 +181,125 @@ async def get_document_types() -> List[str]:
     return [dt.value for dt in DocumentType]
 
 
+@router.get("/list")
+async def list_documents(
+    limit: int = 20,
+    offset: int = 0,
+    document_type: Optional[str] = None,
+) -> dict:
+    """List stored documents with pagination.
+    
+    Args:
+        limit: Maximum documents to return
+        offset: Number of documents to skip
+        document_type: Filter by document type
+        
+    Returns:
+        List of documents with metadata
+    """
+    from modules.storage.models import SearchFilter, DocumentType as StorageDocType
+    
+    try:
+        # Build search filter
+        filter = SearchFilter(
+            limit=limit,
+            offset=offset
+        )
+        
+        if document_type:
+            try:
+                filter.document_type = StorageDocType(document_type)
+            except ValueError:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid document type: {document_type}"
+                )
+        
+        # Search documents
+        results = storage_manager.search_documents(filter)
+        
+        return {
+            "documents": [
+                {
+                    "id": doc.id,
+                    "title": doc.title,
+                    "type": doc.type.value,
+                    "page_count": doc.page_count,
+                    "created_at": doc.created_at.isoformat() if doc.created_at else None,
+                    "metadata": {
+                        "dates": [d.isoformat() for d in doc.metadata.dates] if doc.metadata else [],
+                        "parties": doc.metadata.parties if doc.metadata else [],
+                        "amounts": doc.metadata.amounts if doc.metadata else [],
+                    } if doc.metadata else None
+                }
+                for doc in results.documents
+            ],
+            "total": results.total_results,
+            "limit": limit,
+            "offset": offset
+        }
+        
+    except Exception as e:
+        logger.error(f"Error listing documents: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error listing documents: {str(e)}"
+        )
+
+
+@router.get("/{document_id}")
+async def get_document(document_id: str, include_text: bool = False) -> dict:
+    """Get a specific document by ID.
+    
+    Args:
+        document_id: Document ID
+        include_text: Whether to include full text content
+        
+    Returns:
+        Document details
+    """
+    try:
+        doc = storage_manager.get_document(document_id, include_pages=include_text)
+        
+        if not doc:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Document not found: {document_id}"
+            )
+        
+        response = {
+            "id": doc.id,
+            "title": doc.title,
+            "type": doc.type.value,
+            "page_count": doc.page_count,
+            "page_range": doc.page_range,
+            "created_at": doc.created_at.isoformat() if doc.created_at else None,
+            "storage_path": str(doc.storage_path) if doc.storage_path else None,
+            "metadata": {
+                "dates": [d.isoformat() for d in doc.metadata.dates] if doc.metadata else [],
+                "parties": doc.metadata.parties if doc.metadata else [],
+                "reference_numbers": doc.metadata.reference_numbers if doc.metadata else {},
+                "amounts": doc.metadata.amounts if doc.metadata else [],
+                "custom_fields": doc.metadata.custom_fields if doc.metadata else {}
+            } if doc.metadata else None
+        }
+        
+        if include_text:
+            response["text"] = doc.text
+            response["summary"] = doc.summary
+        
+        return response
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error retrieving document: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error retrieving document: {str(e)}"
+        )
+
+
 async def process_pdf_background(job_id: str, file_path: Path):
     """Background task to process PDF.
     
@@ -195,11 +320,22 @@ async def process_pdf_background(job_id: str, file_path: Path):
         
         result = pdf_splitter.process_pdf(request)
         
-        # TODO: Save result to database
-        # TODO: Update job status
-        
-        logger.info(f"Completed processing job {job_id}: {result.documents_found} documents")
+        if result.success and result.documents:
+            # Save each extracted document to storage
+            stored_doc_ids = []
+            for document in result.documents:
+                try:
+                    # Extract metadata is already done in storage_manager
+                    doc_id = storage_manager.store_document(document, file_path)
+                    stored_doc_ids.append(doc_id)
+                    logger.info(f"Stored document {doc_id} from job {job_id}")
+                except Exception as e:
+                    logger.error(f"Failed to store document from job {job_id}: {e}")
+            
+            logger.info(f"Completed processing job {job_id}: {len(stored_doc_ids)}/{result.documents_found} documents stored")
+        else:
+            logger.error(f"Processing failed for job {job_id}: {result.errors}")
         
     except Exception as e:
-        logger.error(f"Error in background processing: {e}")
-        # TODO: Update job status with error
+        logger.error(f"Error in background processing job {job_id}: {e}")
+        # TODO: Update job status with error in database
