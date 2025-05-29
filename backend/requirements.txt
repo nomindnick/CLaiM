@@ -1,0 +1,39 @@
+# Core dependencies
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+pydantic==2.5.3
+pydantic-settings==2.1.0
+python-multipart==0.0.6
+
+# Database and storage
+sqlalchemy==2.0.25
+alembic==1.13.1
+qdrant-client==1.7.0
+duckdb==0.9.2
+
+# PDF processing
+pymupdf==1.23.20
+pillow==10.2.0
+pytesseract==0.3.10
+
+# AI/ML dependencies
+transformers==4.37.0
+torch==2.1.2
+sentence-transformers==2.2.2
+numpy==1.26.3
+scikit-learn==1.4.0
+
+# Utilities
+python-dotenv==1.0.0
+httpx==0.26.0
+aiofiles==23.2.1
+python-dateutil==2.8.2
+tqdm==4.66.1
+
+# API clients (optional, for hybrid mode)
+openai==1.10.0
+anthropic==0.12.0
+
+# Monitoring and logging
+loguru==0.7.2
+prometheus-client==0.19.0
