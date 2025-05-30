@@ -4,7 +4,9 @@ from typing import Optional, List
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Body
+from fastapi.responses import FileResponse
 from loguru import logger
+import os
 
 from api.config import get_settings
 from shared.exceptions import StorageError
@@ -136,3 +138,33 @@ async def get_recent_documents(
     )
     result = storage.search_documents(filter)
     return result.documents
+
+
+@router.get("/documents/{document_id}/pdf")
+async def get_document_pdf(
+    document_id: str,
+    storage: StorageManager = Depends(get_storage_manager),
+):
+    """Get PDF file for document."""
+    document = storage.get_document(document_id, include_pages=False)
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+    
+    # Check if extracted PDF exists
+    extracted_path = os.path.join("storage", "extracted", f"{document_id}.pdf")
+    if os.path.exists(extracted_path):
+        return FileResponse(
+            path=extracted_path,
+            media_type="application/pdf",
+            filename=f"{document.title}.pdf"
+        )
+    
+    # Fall back to source PDF if available
+    if document.source_pdf_path and os.path.exists(document.source_pdf_path):
+        return FileResponse(
+            path=document.source_pdf_path,
+            media_type="application/pdf",
+            filename=f"{document.title}.pdf"
+        )
+    
+    raise HTTPException(status_code=404, detail="PDF file not found")

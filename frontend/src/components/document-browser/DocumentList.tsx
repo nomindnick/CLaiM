@@ -12,7 +12,10 @@ import {
   Filter,
   ChevronLeft,
   ChevronRight,
-  AlertCircle
+  AlertCircle,
+  Eye,
+  Trash2,
+  MoreVertical
 } from 'lucide-react'
 
 // Document type enum matching backend
@@ -105,6 +108,8 @@ export const DocumentList: React.FC = () => {
   const [totalDocuments, setTotalDocuments] = useState(0)
   const [currentPage, setCurrentPage] = useState(1)
   const [showFilters, setShowFilters] = useState(false)
+  const [deletingDocuments, setDeletingDocuments] = useState<Set<string>>(new Set())
+  const [dropdownOpen, setDropdownOpen] = useState<string | null>(null)
   
   const documentsPerPage = 20
   
@@ -235,6 +240,13 @@ export const DocumentList: React.FC = () => {
     fetchDocuments()
   }, [currentPage, filters.documentTypes.length === 1 ? filters.documentTypes[0] : null])
 
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = () => setDropdownOpen(null)
+    document.addEventListener('click', handleClickOutside)
+    return () => document.removeEventListener('click', handleClickOutside)
+  }, [])
+
   // Sort handler
   const handleSort = (field: SortField) => {
     setSortState(prev => ({
@@ -262,6 +274,45 @@ export const DocumentList: React.FC = () => {
       selectedParty: null
     })
     setCurrentPage(1)
+  }
+
+  // Document actions
+  const viewDocument = (documentId: string) => {
+    window.open(`/api/v1/storage/documents/${documentId}/pdf`, '_blank')
+  }
+
+  const deleteDocument = async (documentId: string, documentTitle: string) => {
+    if (!confirm(`Are you sure you want to delete "${documentTitle}"?\n\nThis action cannot be undone.`)) {
+      return
+    }
+
+    setDeletingDocuments(prev => new Set(prev).add(documentId))
+    setDropdownOpen(null)
+
+    try {
+      await axios.delete(`/api/v1/storage/documents/${documentId}`)
+      
+      // Remove document from local state
+      setDocuments(prev => prev.filter(doc => doc.id !== documentId))
+      setTotalDocuments(prev => prev - 1)
+      
+      // If this was the last document on the page and we're not on page 1, go back a page
+      if (documents.length === 1 && currentPage > 1) {
+        setCurrentPage(prev => prev - 1)
+      } else {
+        // Refresh to get updated list
+        fetchDocuments()
+      }
+    } catch (err: any) {
+      alert(`Failed to delete document: ${err.response?.data?.detail || err.message}`)
+      console.error('Error deleting document:', err)
+    } finally {
+      setDeletingDocuments(prev => {
+        const newSet = new Set(prev)
+        newSet.delete(documentId)
+        return newSet
+      })
+    }
   }
 
   // Pagination
@@ -503,12 +554,17 @@ export const DocumentList: React.FC = () => {
                     Reference
                   </span>
                 </th>
+                <th className="px-6 py-3 text-center">
+                  <span className="text-xs font-medium text-gray-700 uppercase tracking-wider">
+                    Actions
+                  </span>
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-200">
               {documents.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="px-6 py-12 text-center">
+                  <td colSpan={7} className="px-6 py-12 text-center">
                     <FileText className="w-12 h-12 text-gray-400 mx-auto mb-4" />
                     <p className="text-gray-900 font-medium mb-2">No documents found</p>
                     <p className="text-gray-600 text-sm">
@@ -522,11 +578,12 @@ export const DocumentList: React.FC = () => {
               ) : (
                 documents.map((doc) => {
                   const badgeConfig = documentTypeBadgeConfig[doc.type]
+                  const isDeleting = deletingDocuments.has(doc.id)
+                  
                   return (
                     <tr
                       key={doc.id}
-                      onClick={() => console.log('View document:', doc.id)}
-                      className="hover:bg-gray-50 cursor-pointer transition-colors"
+                      className="hover:bg-gray-50 transition-colors"
                     >
                       <td className="px-6 py-4">
                         <div className="flex items-center gap-3">
@@ -581,6 +638,56 @@ export const DocumentList: React.FC = () => {
                           ) : (
                             <span className="text-gray-400">-</span>
                           )}
+                        </div>
+                      </td>
+                      <td className="px-6 py-4">
+                        <div className="flex items-center justify-center gap-2">
+                          <button
+                            onClick={() => viewDocument(doc.id)}
+                            className="p-1.5 rounded-lg text-gray-500 hover:text-blue-600 hover:bg-blue-50 transition-colors"
+                            title="View PDF"
+                          >
+                            <Eye className="w-4 h-4" />
+                          </button>
+                          
+                          <div className="relative">
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                setDropdownOpen(dropdownOpen === doc.id ? null : doc.id)
+                              }}
+                              disabled={isDeleting}
+                              className={`
+                                p-1.5 rounded-lg transition-colors
+                                ${isDeleting
+                                  ? 'text-gray-300 cursor-not-allowed'
+                                  : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
+                                }
+                              `}
+                              title="More actions"
+                            >
+                              {isDeleting ? (
+                                <Loader2 className="w-4 h-4 animate-spin" />
+                              ) : (
+                                <MoreVertical className="w-4 h-4" />
+                              )}
+                            </button>
+                            
+                            {dropdownOpen === doc.id && !isDeleting && (
+                              <div 
+                                className="absolute right-0 top-8 mt-1 w-32 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-10"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                <button
+                                  onClick={() => deleteDocument(doc.id, doc.title)}
+                                  className="flex items-center gap-2 px-3 py-2 text-sm text-red-600 hover:bg-red-50 w-full text-left"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                  Delete
+                                </button>
+                              </div>
+                            )}
+                          </div>
                         </div>
                       </td>
                     </tr>

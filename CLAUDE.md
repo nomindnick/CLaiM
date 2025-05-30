@@ -329,6 +329,15 @@ storage.save(document, embeddings)
   - Visual detection correctly handles scanned documents where pattern matching fails
   - LayoutLM implementation partially complete but requires training data and fine-tuning
   - Created implementation plan for full LayoutLM deployment (deferred to future)
+- [2025-05-30] Implemented Document Management Features for Testing:
+  - Added PDF viewing endpoint `/api/v1/storage/documents/{document_id}/pdf` to serve extracted PDFs
+  - Enhanced DocumentList component with Actions column containing view and delete buttons
+  - Implemented delete functionality with confirmation dialog and proper error handling
+  - Added PDF viewer that opens documents in new browser tab for content verification
+  - Created dropdown menu with delete action and loading states during operations
+  - Added click-outside handler to close dropdowns and proper state management
+  - Tested both features with existing documents - PDF viewing serves actual PDFs, delete removes from database and filesystem
+  - These features significantly improve testing workflow for document processing pipeline validation
 
 ## Debug Commands
 ```bash
