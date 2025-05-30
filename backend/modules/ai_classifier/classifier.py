@@ -188,7 +188,7 @@ class DocumentClassifier:
         )
     
     def _classify_local(self, text: str, features: ClassificationFeatures) -> Dict:
-        """Perform local classification using loaded model.
+        """Perform local classification using loaded model with rule-based input.
         
         Args:
             text: Document text
@@ -198,75 +198,30 @@ class DocumentClassifier:
             Classification result dictionary
         """
         try:
-            # Use model manager for classification
-            model_result = self.model_manager.classify_text(text)
+            # STEP 1: Always run rule-based classification first
+            rule_based_result = self._fallback_classification(features)
             
-            # Enhance with feature-based adjustments
-            enhanced_result = self._enhance_with_features(model_result, features)
+            # STEP 2: Use AI model with rule-based context (no confidence threshold yet)
+            model_result = self.model_manager.classify_text(
+                text, 
+                min_confidence=0.0,  # Don't apply threshold yet - ensemble will decide
+                rule_based_suggestion=rule_based_result
+            )
             
-            return enhanced_result
+            # STEP 3: Create ensemble result combining both approaches
+            ensemble_result = self._create_ensemble_result(
+                ai_result=model_result,
+                rule_result=rule_based_result,
+                features=features
+            )
+            
+            return ensemble_result
             
         except Exception as e:
             logger.error(f"Local classification failed: {e}")
             # Fallback to pure rule-based classification
             return self._fallback_classification(features)
     
-    def _enhance_with_features(self, model_result: Dict, features: ClassificationFeatures) -> Dict:
-        """Enhance model results with feature-based adjustments.
-        
-        Args:
-            model_result: Result from model classification
-            features: Extracted features
-            
-        Returns:
-            Enhanced classification result
-        """
-        doc_type = model_result["document_type"]
-        confidence = model_result["confidence"]
-        
-        # Feature-based confidence adjustments
-        confidence_adjustment = 0.0
-        reasoning_parts = [model_result.get("reasoning", "")]
-        
-        # Reference number boost
-        if features.reference_numbers:
-            ref_types = [ref.split('_')[0] for ref in features.reference_numbers]
-            if doc_type.value in ref_types or any(
-                rt in doc_type.value for rt in ref_types
-            ):
-                confidence_adjustment += 0.1
-                reasoning_parts.append(f"Found matching reference numbers: {features.reference_numbers[:3]}")
-        
-        # Structural feature boost
-        if doc_type == DocumentType.INVOICE and features.has_amounts:
-            confidence_adjustment += 0.05
-            reasoning_parts.append("Contains monetary amounts (invoice indicator)")
-        
-        if doc_type == DocumentType.CONTRACT and features.has_signature_area:
-            confidence_adjustment += 0.05
-            reasoning_parts.append("Contains signature area (contract indicator)")
-        
-        if doc_type == DocumentType.DAILY_REPORT and features.has_dates:
-            confidence_adjustment += 0.05
-            reasoning_parts.append("Contains dates (daily report indicator)")
-        
-        # Key phrase boost
-        doc_phrases = self._key_phrases.get(doc_type, [])
-        matching_phrases = [p for p in features.key_phrases if p in doc_phrases]
-        if matching_phrases:
-            phrase_boost = min(len(matching_phrases) * 0.02, 0.1)
-            confidence_adjustment += phrase_boost
-            reasoning_parts.append(f"Found key phrases: {matching_phrases[:3]}")
-        
-        # Apply adjustment
-        final_confidence = min(confidence + confidence_adjustment, 1.0)
-        
-        return {
-            "document_type": doc_type,
-            "confidence": final_confidence,
-            "alternatives": model_result.get("alternatives", []),
-            "reasoning": " | ".join(filter(None, reasoning_parts))
-        }
     
     def _fallback_classification(self, features: ClassificationFeatures) -> Dict:
         """Pure rule-based classification fallback.
@@ -334,6 +289,86 @@ class DocumentClassifier:
             "confidence": min(best_score, 1.0),
             "alternatives": alternatives,
             "reasoning": reasoning
+        }
+    
+    def _create_ensemble_result(
+        self, 
+        ai_result: Dict, 
+        rule_result: Dict, 
+        features: ClassificationFeatures
+    ) -> Dict:
+        """Create ensemble result combining AI and rule-based classifications.
+        
+        Args:
+            ai_result: Result from AI model
+            rule_result: Result from rule-based classification
+            features: Extracted features
+            
+        Returns:
+            Combined classification result
+        """
+        ai_type = ai_result["document_type"]
+        ai_confidence = ai_result["confidence"]
+        rule_type = rule_result["document_type"]
+        rule_confidence = rule_result["confidence"]
+        
+        reasoning_parts = []
+        
+        # If both methods agree, boost confidence
+        if ai_type == rule_type:
+            final_confidence = min(ai_confidence * 1.2, 1.0)  # 20% boost
+            final_type = ai_type
+            reasoning_parts.append(f"AI and rules agree on {ai_type.value}")
+            reasoning_parts.append(f"AI: {ai_confidence:.2f}, Rules: {rule_confidence:.2f}")
+        
+        # If they disagree, use weighted decision based on confidence
+        else:
+            # Give slight preference to rule-based for high-confidence rule matches
+            if rule_confidence > 0.7 and ai_confidence < 0.6:
+                final_type = rule_type
+                final_confidence = rule_confidence * 0.9  # Slight penalty for disagreement
+                reasoning_parts.append(f"Rules override AI: {rule_type.value} (high rule confidence)")
+            
+            # If AI is very confident, trust it
+            elif ai_confidence > 0.8:
+                final_type = ai_type
+                final_confidence = ai_confidence * 0.9  # Slight penalty for disagreement
+                reasoning_parts.append(f"AI override rules: {ai_type.value} (high AI confidence)")
+            
+            # Otherwise, weighted average based on confidence
+            else:
+                if ai_confidence >= rule_confidence:
+                    final_type = ai_type
+                    final_confidence = (ai_confidence * 0.7) + (rule_confidence * 0.3)
+                else:
+                    final_type = rule_type
+                    final_confidence = (rule_confidence * 0.7) + (ai_confidence * 0.3)
+                
+                reasoning_parts.append(f"Weighted decision: {final_type.value}")
+                reasoning_parts.append(f"AI suggested {ai_type.value} ({ai_confidence:.2f})")
+                reasoning_parts.append(f"Rules suggested {rule_type.value} ({rule_confidence:.2f})")
+        
+        # Combine alternatives from both methods
+        all_alternatives = {}
+        for alt in ai_result.get("alternatives", []):
+            all_alternatives[alt["label"]] = alt["score"] * 0.6  # Weight AI alternatives
+        
+        for alt in rule_result.get("alternatives", []):
+            label = alt["label"]
+            score = alt["score"] * 0.4  # Weight rule alternatives
+            all_alternatives[label] = all_alternatives.get(label, 0) + score
+        
+        # Sort and take top 3
+        final_alternatives = [
+            {"label": label, "score": score}
+            for label, score in sorted(all_alternatives.items(), key=lambda x: x[1], reverse=True)
+        ][:3]
+        
+        return {
+            "document_type": final_type,
+            "confidence": final_confidence,
+            "alternatives": final_alternatives,
+            "reasoning": " | ".join(reasoning_parts)
         }
     
     def get_model_status(self):

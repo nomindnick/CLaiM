@@ -107,12 +107,18 @@ class ModelManager:
             self.classifier_pipeline = None
             return False
     
-    def classify_text(self, text: str, min_confidence: float = 0.3) -> Dict[str, Any]:
+    def classify_text(
+        self, 
+        text: str, 
+        min_confidence: float = 0.3,
+        rule_based_suggestion: Optional[Dict] = None
+    ) -> Dict[str, Any]:
         """Classify document text using loaded model.
         
         Args:
             text: Document text to classify
             min_confidence: Minimum confidence for classification
+            rule_based_suggestion: Optional rule-based classification result to inform AI
             
         Returns:
             Dictionary with classification results
@@ -126,10 +132,10 @@ class ModelManager:
             
             if self.model == "rule_based":
                 # Use rule-based classification for now
-                result = self._rule_based_classify(text)
+                result = self._rule_based_classify(text, rule_based_suggestion)
             else:
                 # Use fine-tuned model
-                result = self._model_classify(text)
+                result = self._model_classify(text, rule_based_suggestion)
             
             processing_time = time.time() - start_time
             result["processing_time"] = processing_time
@@ -152,11 +158,20 @@ class ModelManager:
                 "processing_time": 0.0
             }
     
-    def _rule_based_classify(self, text: str) -> Dict[str, Any]:
+    def _rule_based_classify(
+        self, 
+        text: str, 
+        rule_based_suggestion: Optional[Dict] = None
+    ) -> Dict[str, Any]:
         """Rule-based classification using pattern matching.
         
         This is a fallback when we don't have a fine-tuned model.
+        When rule_based_suggestion is provided, it means we're being called
+        from the ensemble method and should return the suggestion directly.
         """
+        # If we already have a rule-based suggestion, return it
+        if rule_based_suggestion:
+            return rule_based_suggestion
         text_lower = text.lower()
         
         # Define patterns for each document type
@@ -221,18 +236,36 @@ class ModelManager:
             "reasoning": reasoning
         }
     
-    def _model_classify(self, text: str) -> Dict[str, Any]:
-        """Classification using fine-tuned DistilBERT model."""
+    def _model_classify(
+        self, 
+        text: str, 
+        rule_based_suggestion: Optional[Dict] = None
+    ) -> Dict[str, Any]:
+        """Classification using fine-tuned DistilBERT model.
+        
+        Args:
+            text: Document text to classify
+            rule_based_suggestion: Rule-based classification to inform the model
+        """
         if not self.classifier_pipeline:
             raise RuntimeError("Classification pipeline not available")
         
+        # For fine-tuned models, we can incorporate rule-based suggestions
+        # by prepending them as context to the input text
+        enhanced_text = text
+        if rule_based_suggestion:
+            rule_type = rule_based_suggestion["document_type"].value
+            rule_conf = rule_based_suggestion["confidence"]
+            context = f"[RULE_SUGGESTION: {rule_type} (confidence: {rule_conf:.2f})] "
+            enhanced_text = context + text
+        
         # Truncate text to model's max length
         max_length = 512
-        if len(text) > max_length:
-            text = text[:max_length]
+        if len(enhanced_text) > max_length:
+            enhanced_text = enhanced_text[:max_length]
         
         # Get predictions
-        predictions = self.classifier_pipeline(text)
+        predictions = self.classifier_pipeline(enhanced_text)
         
         # Find best prediction
         best_pred = max(predictions, key=lambda x: x['score'])
@@ -245,6 +278,9 @@ class ModelManager:
         ][:3]
         
         reasoning = f"DistilBERT classification: {best_pred['score']:.3f} confidence"
+        if rule_based_suggestion:
+            rule_type = rule_based_suggestion["document_type"].value
+            reasoning += f" (considered rule suggestion: {rule_type})"
         
         return {
             "document_type": best_type,
