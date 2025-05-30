@@ -20,6 +20,9 @@ from .boundary_detector import BoundaryDetector
 from .ocr_handler import OCRHandler
 from .hybrid_boundary_detector import HybridBoundaryDetector, DetectionLevel
 from .hybrid_text_extractor import HybridTextExtractor, TextExtractionMethod
+# Lazy import to avoid circular dependencies
+# from ..ai_classifier.classifier import document_classifier
+# from ..ai_classifier.models import ClassificationRequest
 
 
 class PDFSplitter:
@@ -308,9 +311,33 @@ class PDFSplitter:
         
         # Classify document type if requested
         if request.classify_documents:
-            # TODO: Implement classification using DistilBERT
-            # For now, use simple heuristics
-            document.type = self._classify_document_simple(document.text)
+            try:
+                # Lazy import to avoid circular dependencies
+                from ..ai_classifier.classifier import document_classifier
+                from ..ai_classifier.models import ClassificationRequest
+                
+                # Use AI classifier for document type prediction
+                classification_request = ClassificationRequest(
+                    text=document.text,
+                    title=f"Document from pages {start_page + 1}-{end_page + 1}",
+                    min_confidence=0.3,
+                    require_reasoning=False
+                )
+                
+                classification_result = document_classifier.classify(classification_request)
+                document.type = classification_result.document_type
+                document.classification_confidence = classification_result.confidence
+                
+                logger.info(
+                    f"Classified document (pages {start_page + 1}-{end_page + 1}) as "
+                    f"{document.type.value} with confidence {document.classification_confidence:.3f}"
+                )
+                
+            except Exception as e:
+                logger.error(f"AI classification failed, using fallback: {e}")
+                # Fallback to simple rule-based classification
+                document.type = self._classify_document_simple(document.text)
+                document.classification_confidence = 0.5  # Default confidence for fallback
         
         # Extract metadata if requested
         if request.extract_metadata:
