@@ -30,11 +30,12 @@ class PDFSplitter:
         self.hybrid_detector = None  # Hybrid boundary detector
         self.use_visual_detection = use_visual_detection
     
-    def process_pdf(self, request: PDFProcessingRequest) -> ProcessingResult:
+    def process_pdf(self, request: PDFProcessingRequest, progress_callback=None) -> ProcessingResult:
         """Process a PDF file and extract individual documents.
         
         Args:
             request: Processing request with file path and options
+            progress_callback: Optional callback function(current, total, message)
             
         Returns:
             ProcessingResult with extracted documents
@@ -60,6 +61,9 @@ class PDFSplitter:
             
             logger.info(f"Processing PDF: {request.file_path.name} ({result.total_pages} pages)")
             
+            if progress_callback:
+                progress_callback(0, result.total_pages, "Starting PDF processing")
+            
             # Initialize OCR handler if needed (for boundary detection on scanned docs)
             if request.perform_ocr and self.ocr_handler is None:
                 self.ocr_handler = OCRHandler(
@@ -83,6 +87,9 @@ class PDFSplitter:
             
             if request.split_documents:
                 # Detect document boundaries
+                if progress_callback:
+                    progress_callback(1, result.total_pages, "Detecting document boundaries")
+                
                 if self.use_visual_detection:
                     # Use hybrid detection with visual analysis
                     detection_result = self.hybrid_detector.detect_boundaries(
@@ -110,12 +117,20 @@ class PDFSplitter:
                         result.warnings.append(f"Stopped at {request.max_pages} documents (limit reached)")
                         break
                     
+                    if progress_callback:
+                        progress_callback(
+                            start, 
+                            result.total_pages, 
+                            f"Extracting document {i+1}/{len(boundaries)} (pages {start+1}-{end+1})"
+                        )
+                    
                     document = self._extract_document(
                         pdf_doc,
                         start,
                         end,
                         result.source_pdf_id,
                         request,
+                        progress_callback,
                     )
                     result.documents.append(document)
             else:
@@ -168,6 +183,7 @@ class PDFSplitter:
         end_page: int,
         source_pdf_id: str,
         request: PDFProcessingRequest,
+        progress_callback=None,
     ) -> Document:
         """Extract a single document from page range.
         

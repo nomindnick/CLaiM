@@ -81,10 +81,16 @@ class VisualBoundaryDetector:
         logger.info(f"Loading visual model: {model_name}")
         self.model = SentenceTransformer(model_name, device=device)
         
-        # Initialize cache
+        # Initialize cache with size limits and expiration
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(exist_ok=True)
-        self.cache = dc.Cache(str(self.cache_dir))
+        self.cache = dc.Cache(
+            str(self.cache_dir),
+            size_limit=1024 * 1024 * 1024,  # 1GB limit
+            eviction_policy='least-recently-used',
+            statistics=True,  # Enable statistics tracking
+            tag_index=True,   # Enable tag indexing for batch operations
+        )
         
         # Configuration
         self.similarity_threshold = 0.7
@@ -102,13 +108,15 @@ class VisualBoundaryDetector:
     def detect_boundaries(self, 
                          pdf_doc: fitz.Document,
                          ocr_handler: Optional[Any] = None,
-                         use_cache: bool = True) -> List[BoundaryScore]:
+                         use_cache: bool = True,
+                         progress_callback=None) -> List[BoundaryScore]:
         """Detect document boundaries using visual and textual analysis.
         
         Args:
             pdf_doc: PyMuPDF document
             ocr_handler: OCR handler for scanned pages
             use_cache: Whether to use cached embeddings
+            progress_callback: Optional callback function(current, total, message)
             
         Returns:
             List of boundary scores for each page
@@ -117,7 +125,7 @@ class VisualBoundaryDetector:
         start_time = time.time()
         
         # Extract features for all pages
-        page_features = self._extract_all_features(pdf_doc, ocr_handler, use_cache)
+        page_features = self._extract_all_features(pdf_doc, ocr_handler, use_cache, progress_callback)
         
         # Compute boundary scores
         boundary_scores = self._compute_boundary_scores(page_features)
@@ -133,13 +141,22 @@ class VisualBoundaryDetector:
     def _extract_all_features(self, 
                              pdf_doc: fitz.Document,
                              ocr_handler: Optional[Any],
-                             use_cache: bool) -> List[PageFeatures]:
+                             use_cache: bool,
+                             progress_callback=None) -> List[PageFeatures]:
         """Extract features from all pages."""
         features = []
         
         # Process pages in batches for efficiency
         for batch_start in range(0, pdf_doc.page_count, self.batch_size):
             batch_end = min(batch_start + self.batch_size, pdf_doc.page_count)
+            
+            if progress_callback:
+                progress_callback(
+                    batch_start, 
+                    pdf_doc.page_count, 
+                    f"Extracting visual features (batch {batch_start//self.batch_size + 1})"
+                )
+            
             batch_features = self._process_page_batch(
                 pdf_doc, batch_start, batch_end, ocr_handler, use_cache
             )
@@ -171,6 +188,7 @@ class VisualBoundaryDetector:
                 logger.debug(f"Using cached embedding for page {page_num + 1}")
             else:
                 # Convert page to image for batch processing
+                pix = None
                 try:
                     pix = page.get_pixmap(dpi=self.target_dpi)
                     img_data = pix.tobytes("png")
@@ -179,6 +197,10 @@ class VisualBoundaryDetector:
                     embed_indices.append(len(batch_features))
                 except Exception as e:
                     logger.error(f"Failed to convert page {page_num + 1} to image: {e}")
+                finally:
+                    # Properly release pixmap to prevent memory leak
+                    if pix:
+                        pix = None
             
             batch_features.append(features)
         
@@ -394,6 +416,7 @@ class VisualBoundaryDetector:
     
     def _calculate_whitespace_ratio(self, page: fitz.Page) -> float:
         """Calculate the ratio of whitespace on the page."""
+        pix = None
         try:
             # Get page as image
             pix = page.get_pixmap(dpi=72)  # Low DPI for speed
@@ -415,6 +438,10 @@ class VisualBoundaryDetector:
         except Exception as e:
             logger.debug(f"Failed to calculate whitespace ratio: {e}")
             return 0.5
+        finally:
+            # Release pixmap to prevent memory leak
+            if pix:
+                pix = None
     
     def _detect_letterhead(self, page: fitz.Page) -> bool:
         """Detect if page has a letterhead."""
@@ -436,8 +463,12 @@ class VisualBoundaryDetector:
                     for rect in img_rects:
                         if top_region.intersects(rect):
                             return True
-                except:
-                    pass
+                except fitz.FitzError as e:
+                    logger.debug(f"Failed to get image bbox: {e}")
+                    continue
+                except Exception as e:
+                    logger.warning(f"Unexpected error checking image bbox: {e}")
+                    continue
             
             # Check for heavy text/graphics in header
             drawings = page.get_drawings()
@@ -467,7 +498,11 @@ class VisualBoundaryDetector:
             drawings = page.get_drawings()
             # Many drawing elements suggest technical content
             return len(drawings) > 50
-        except:
+        except fitz.FitzError as e:
+            logger.debug(f"Failed to get drawings: {e}")
+            return False
+        except Exception as e:
+            logger.warning(f"Unexpected error detecting drawings: {e}")
             return False
     
     def _get_cache_key(self, pdf_name: str, page_num: int) -> str:

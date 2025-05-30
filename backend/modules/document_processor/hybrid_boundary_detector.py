@@ -71,7 +71,8 @@ class HybridBoundaryDetector:
     def detect_boundaries(self,
                          pdf_doc: fitz.Document,
                          max_level: DetectionLevel = DetectionLevel.VISUAL,
-                         force_visual: bool = False) -> HybridBoundaryResult:
+                         force_visual: bool = False,
+                         progress_callback=None) -> HybridBoundaryResult:
         """Detect document boundaries using progressive approach.
         
         Args:

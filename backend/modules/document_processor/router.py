@@ -3,7 +3,7 @@
 import shutil
 import uuid
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple, Dict
 
 from fastapi import APIRouter, File, HTTPException, UploadFile, BackgroundTasks
 from fastapi.responses import JSONResponse
@@ -181,6 +181,86 @@ async def get_document_types() -> List[str]:
     return [dt.value for dt in DocumentType]
 
 
+@router.post("/adjust-boundaries/{document_id}")
+async def adjust_boundaries(
+    document_id: str,
+    boundaries: List[Tuple[int, int]],
+    boundary_confidence: Optional[Dict[int, float]] = None,
+    reclassify: bool = True,
+    background_tasks: BackgroundTasks = BackgroundTasks(),
+) -> dict:
+    """Adjust document boundaries manually by attorneys.
+    
+    This endpoint allows attorneys to override AI-detected boundaries
+    and manually split or merge documents as needed.
+    
+    Args:
+        document_id: Source document ID to adjust
+        boundaries: List of (start_page, end_page) tuples defining new boundaries
+        boundary_confidence: Optional confidence scores for each boundary
+        reclassify: Whether to re-run classification on adjusted documents
+        background_tasks: FastAPI background tasks
+        
+    Returns:
+        Adjustment confirmation with new document IDs
+    """
+    try:
+        # Get the original document
+        doc = storage_manager.get_document(document_id, include_pages=True)
+        if not doc:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Document not found: {document_id}"
+            )
+        
+        # Validate boundaries
+        total_pages = doc.page_count
+        for start, end in boundaries:
+            if start < 0 or end >= total_pages or start > end:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid boundary: pages {start}-{end} (document has {total_pages} pages)"
+                )
+        
+        # Sort boundaries and check for overlaps
+        sorted_boundaries = sorted(boundaries, key=lambda x: x[0])
+        for i in range(1, len(sorted_boundaries)):
+            if sorted_boundaries[i][0] <= sorted_boundaries[i-1][1]:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Overlapping boundaries detected: {sorted_boundaries[i-1]} and {sorted_boundaries[i]}"
+                )
+        
+        # Create adjustment job
+        job_id = str(uuid.uuid4())
+        
+        # Process adjustment in background
+        background_tasks.add_task(
+            process_boundary_adjustment,
+            job_id,
+            document_id,
+            sorted_boundaries,
+            boundary_confidence,
+            reclassify
+        )
+        
+        return {
+            "job_id": job_id,
+            "status": "processing",
+            "message": f"Adjusting boundaries for document {document_id}",
+            "boundaries": sorted_boundaries
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error adjusting boundaries: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error adjusting boundaries: {str(e)}"
+        )
+
+
 @router.get("/list")
 async def list_documents(
     limit: int = 20,
@@ -340,3 +420,86 @@ async def process_pdf_background(job_id: str, file_path: Path):
     except Exception as e:
         logger.error(f"Error in background processing job {job_id}: {e}")
         # TODO: Update job status with error in database
+
+
+async def process_boundary_adjustment(
+    job_id: str,
+    document_id: str, 
+    boundaries: List[Tuple[int, int]],
+    boundary_confidence: Optional[Dict[int, float]],
+    reclassify: bool
+):
+    """Background task to process boundary adjustments.
+    
+    Args:
+        job_id: Job identifier
+        document_id: Original document ID
+        boundaries: New boundary definitions
+        boundary_confidence: Optional confidence scores
+        reclassify: Whether to reclassify split documents
+    """
+    logger.info(f"Processing boundary adjustment job {job_id} for document {document_id}")
+    
+    try:
+        # Get the original document with pages
+        original_doc = storage_manager.get_document(document_id, include_pages=True)
+        if not original_doc:
+            logger.error(f"Document {document_id} not found for boundary adjustment")
+            return
+        
+        # Create new documents based on boundaries
+        new_doc_ids = []
+        
+        for i, (start, end) in enumerate(boundaries):
+            # Create a new document from the page range
+            from .models import Document, DocumentPage
+            
+            new_doc = Document(
+                id=str(uuid.uuid4()),
+                source_document_id=original_doc.source_document_id,
+                source_pdf_path=original_doc.source_pdf_path,
+                page_range=(start + 1, end + 1),  # Convert to 1-based
+                type=original_doc.type,  # Keep original type initially
+                pages=[],
+                created_at=None,
+                processing_metadata={
+                    "adjusted_from": document_id,
+                    "adjustment_job": job_id,
+                    "boundary_confidence": boundary_confidence.get(i, 1.0) if boundary_confidence else 1.0
+                }
+            )
+            
+            # Copy pages within the boundary
+            for page_idx in range(start, end + 1):
+                if page_idx < len(original_doc.pages):
+                    orig_page = original_doc.pages[page_idx]
+                    new_page = DocumentPage(
+                        page_number=page_idx - start + 1,  # Renumber pages
+                        text=orig_page.text,
+                        is_scanned=orig_page.is_scanned,
+                        has_tables=orig_page.has_tables,
+                        has_images=orig_page.has_images,
+                        confidence=orig_page.confidence
+                    )
+                    new_doc.pages.append(new_page)
+            
+            # Reclassify if requested
+            if reclassify and new_doc.text:
+                # TODO: Implement classification when AI classifier is ready
+                logger.info(f"Classification requested for adjusted document {new_doc.id}")
+            
+            # Save the new document
+            doc_id = storage_manager.store_document(
+                new_doc, 
+                Path(original_doc.storage_path) if original_doc.storage_path else None
+            )
+            new_doc_ids.append(doc_id)
+            logger.info(f"Created adjusted document {doc_id} (pages {start+1}-{end+1})")
+        
+        # Mark original document as superseded
+        # TODO: Implement document versioning/status in storage
+        logger.info(f"Boundary adjustment complete for job {job_id}: created {len(new_doc_ids)} documents")
+        
+    except Exception as e:
+        logger.error(f"Error in boundary adjustment job {job_id}: {e}")
+        # TODO: Update job status with error
