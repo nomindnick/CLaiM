@@ -18,14 +18,17 @@ from .models import (
 )
 from .boundary_detector import BoundaryDetector
 from .ocr_handler import OCRHandler
+from .hybrid_boundary_detector import HybridBoundaryDetector, DetectionLevel
 
 
 class PDFSplitter:
     """Splits large PDF files into individual logical documents."""
     
-    def __init__(self):
+    def __init__(self, use_visual_detection: bool = True):
         self.ocr_handler = None  # Lazy initialization
         self.boundary_detector = None  # Will be initialized when OCR handler is ready
+        self.hybrid_detector = None  # Hybrid boundary detector
+        self.use_visual_detection = use_visual_detection
     
     def process_pdf(self, request: PDFProcessingRequest) -> ProcessingResult:
         """Process a PDF file and extract individual documents.
@@ -64,14 +67,42 @@ class PDFSplitter:
                     min_confidence=0.3  # Lower threshold for boundary detection
                 )
             
-            # Initialize boundary detector with OCR handler
-            if self.boundary_detector is None:
-                self.boundary_detector = BoundaryDetector(ocr_handler=self.ocr_handler)
+            # Initialize boundary detector
+            if self.use_visual_detection:
+                # Use hybrid detector for better accuracy
+                if self.hybrid_detector is None:
+                    self.hybrid_detector = HybridBoundaryDetector(
+                        ocr_handler=self.ocr_handler,
+                        visual_model="clip-ViT-B-32",
+                        cache_dir=".boundary_cache"
+                    )
+            else:
+                # Use pattern-based detector only
+                if self.boundary_detector is None:
+                    self.boundary_detector = BoundaryDetector(ocr_handler=self.ocr_handler)
             
             if request.split_documents:
                 # Detect document boundaries
-                boundaries = self.boundary_detector.detect_boundaries(pdf_doc)
-                logger.info(f"Found {len(boundaries)} document boundaries")
+                if self.use_visual_detection:
+                    # Use hybrid detection with visual analysis
+                    detection_result = self.hybrid_detector.detect_boundaries(
+                        pdf_doc,
+                        max_level=DetectionLevel.VISUAL,
+                        force_visual=request.force_visual_detection if hasattr(request, 'force_visual_detection') else False
+                    )
+                    boundaries = detection_result.boundaries
+                    
+                    # Store detection metadata for later use
+                    result.detection_level = detection_result.detection_level.name.lower()
+                    result.boundary_confidence = detection_result.confidence_scores
+                    
+                    logger.info(
+                        f"Found {len(boundaries)} document boundaries using {detection_result.detection_level.name.lower()} detection"
+                    )
+                else:
+                    # Use simple pattern detection
+                    boundaries = self.boundary_detector.detect_boundaries(pdf_doc)
+                    logger.info(f"Found {len(boundaries)} document boundaries")
                 
                 # Extract individual documents
                 for i, (start, end) in enumerate(boundaries):

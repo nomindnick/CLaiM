@@ -1,0 +1,25 @@
+[
+  {
+    "pdf_path": "tests/test_data/Mixed_Document_Contract_Amendment.pdf",
+    "boundaries": [
+      [
+        0,
+        2
+      ]
+    ],
+    "document_types": {
+      "0": "CONTRACT"
+    },
+    "notes": "Mixed document - contract amendment with scanned pages. Should be treated as one document."
+  },
+  {
+    "pdf_path": "tests/Sample PDFs.pdf",
+    "boundaries": [
+      [
+        0,
+        35
+      ]
+    ],
+    "notes": "Sample construction documents - all pages are from the same scanned document"
+  }
+]

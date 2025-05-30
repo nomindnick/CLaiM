@@ -135,6 +135,10 @@ class ProcessingResult(BaseModel):
     ocr_pages: int = 0
     average_confidence: float = 1.0
     
+    # Boundary detection metadata
+    detection_level: Optional[str] = None
+    boundary_confidence: Optional[Dict[int, float]] = None
+    
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -151,5 +155,6 @@ class PDFProcessingRequest(BaseModel):
     ocr_language: str = "eng"
     min_confidence: float = 0.5
     max_pages: Optional[int] = None  # Limit processing for testing
+    force_visual_detection: bool = False  # Force visual boundary detection
     
     model_config = ConfigDict(from_attributes=True)
