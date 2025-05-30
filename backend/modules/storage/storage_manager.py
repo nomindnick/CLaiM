@@ -82,6 +82,10 @@ class StorageManager:
                     stored_doc.id
                 )
                 stored_doc.storage_path = extracted_path
+                
+                # Update page count to match the actual extracted PDF
+                actual_page_count = stored_doc.page_range[1] - stored_doc.page_range[0] + 1
+                stored_doc.page_count = actual_page_count
             
             # Convert pages
             stored_pages = []
@@ -182,6 +186,7 @@ class StorageManager:
     def _extract_document_pages(self, pdf_path: Path, start_page: int, end_page: int, doc_id: str) -> Path:
         """Extract specific pages from PDF to new file."""
         output_path = self.extracted_dir / f"{doc_id}.pdf"
+        output_path = output_path.resolve()  # Convert to absolute path
         
         try:
             # Open source PDF

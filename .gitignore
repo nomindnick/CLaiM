@@ -114,6 +114,13 @@ cache/
 *.pth
 *.ckpt
 
+# Storage directories - generated content
+storage/extracted/
+storage/pdfs/
+storage/database/
+.boundary_cache/
+.test_boundary_cache/
+
 # Documentation build
 docs/_build/
 docs/.sphinx/

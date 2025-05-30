@@ -150,7 +150,15 @@ async def get_document_pdf(
     if not document:
         raise HTTPException(status_code=404, detail="Document not found")
     
-    # Check if extracted PDF exists
+    # First, check if document has a storage_path (extracted PDF)
+    if document.storage_path and os.path.exists(str(document.storage_path)):
+        return FileResponse(
+            path=str(document.storage_path),
+            media_type="application/pdf",
+            filename=f"{document.title}.pdf"
+        )
+    
+    # Fallback: check default extracted path
     extracted_path = os.path.join("storage", "extracted", f"{document_id}.pdf")
     if os.path.exists(extracted_path):
         return FileResponse(
@@ -160,9 +168,9 @@ async def get_document_pdf(
         )
     
     # Fall back to source PDF if available
-    if document.source_pdf_path and os.path.exists(document.source_pdf_path):
+    if document.source_pdf_path and os.path.exists(str(document.source_pdf_path)):
         return FileResponse(
-            path=document.source_pdf_path,
+            path=str(document.source_pdf_path),
             media_type="application/pdf",
             filename=f"{document.title}.pdf"
         )

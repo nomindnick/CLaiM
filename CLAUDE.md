@@ -338,6 +338,16 @@ storage.save(document, embeddings)
   - Added click-outside handler to close dropdowns and proper state management
   - Tested both features with existing documents - PDF viewing serves actual PDFs, delete removes from database and filesystem
   - These features significantly improve testing workflow for document processing pipeline validation
+- [2025-05-30] Fixed Critical PDF Splitting and Viewing Issues:
+  - Diagnosed and resolved page count discrepancies between database and actual extracted PDFs
+  - Fixed PDF viewing endpoint to serve actual split documents instead of original full PDF
+  - Updated storage manager to calculate accurate page counts based on page ranges (page_range[1] - page_range[0] + 1)
+  - Modified PDF extraction to use absolute paths instead of relative paths for reliable file serving
+  - Enhanced PDF viewing endpoint to prioritize document.storage_path over hardcoded fallback paths
+  - Created comprehensive test script (test_pdf_fixes.py) to verify both page counting and file serving
+  - Confirmed PDF splitting is working correctly: split PDFs exist with proper content (18 pages extracted from 36-page source)
+  - Verified all extracted documents now show accurate page counts in document list
+  - PDF "View" action now correctly opens individual split documents rather than full original PDF
 
 ## Debug Commands
 ```bash
