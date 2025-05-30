@@ -19,16 +19,19 @@ from .models import (
 from .boundary_detector import BoundaryDetector
 from .ocr_handler import OCRHandler
 from .hybrid_boundary_detector import HybridBoundaryDetector, DetectionLevel
+from .hybrid_text_extractor import HybridTextExtractor, TextExtractionMethod
 
 
 class PDFSplitter:
     """Splits large PDF files into individual logical documents."""
     
-    def __init__(self, use_visual_detection: bool = True):
+    def __init__(self, use_visual_detection: bool = True, use_hybrid_text_extraction: bool = True):
         self.ocr_handler = None  # Lazy initialization
         self.boundary_detector = None  # Will be initialized when OCR handler is ready
         self.hybrid_detector = None  # Hybrid boundary detector
+        self.text_extractor = None  # Hybrid text extractor
         self.use_visual_detection = use_visual_detection
+        self.use_hybrid_text_extraction = use_hybrid_text_extraction
     
     def process_pdf(self, request: PDFProcessingRequest, progress_callback=None) -> ProcessingResult:
         """Process a PDF file and extract individual documents.
@@ -208,49 +211,74 @@ class PDFSplitter:
         for page_num in range(start_page, end_page + 1):
             page = pdf_doc[page_num]
             
-            # Extract text
-            text = page.get_text()
-            
-            # Check if page is scanned (no text extracted)
-            is_scanned = len(text.strip()) < 10  # Arbitrary threshold
-            
-            confidence = 1.0  # Default confidence for non-OCR text
-            
-            if is_scanned and request.perform_ocr:
-                # Initialize OCR handler if needed
-                if self.ocr_handler is None:
-                    self.ocr_handler = OCRHandler(
+            # Extract text using intelligent hybrid approach
+            if self.use_hybrid_text_extraction and request.perform_ocr:
+                # Initialize hybrid text extractor if needed
+                if self.text_extractor is None:
+                    self.text_extractor = HybridTextExtractor(
                         language=request.ocr_language,
                         min_confidence=request.min_confidence
                     )
                 
                 try:
-                    # Perform OCR
-                    ocr_text, ocr_confidence = self.ocr_handler.process_page(page)
+                    # Use hybrid extraction
+                    text, confidence, extraction_method = self.text_extractor.extract_text(page)
                     
-                    if ocr_text and ocr_confidence >= request.min_confidence:
-                        text = ocr_text
-                        confidence = ocr_confidence
-                        logger.info(
-                            f"OCR successful for page {page_num + 1} "
-                            f"(confidence: {confidence:.2f})"
-                        )
-                    else:
-                        text = "[OCR failed - low confidence]"
-                        confidence = ocr_confidence
-                        logger.warning(
-                            f"OCR failed for page {page_num + 1} - "
-                            f"confidence {ocr_confidence:.2f} below threshold"
-                        )
-                        
-                except OCRError as e:
-                    logger.error(f"OCR error on page {page_num + 1}: {e}")
-                    text = "[OCR failed - error]"
-                    confidence = 0.0
+                    # Determine if page is scanned based on extraction method
+                    is_scanned = extraction_method != TextExtractionMethod.PYMUPDF
+                    
+                    logger.info(
+                        f"Page {page_num + 1}: {len(text)} chars using {extraction_method.value} "
+                        f"(confidence: {confidence:.3f})"
+                    )
+                    
                 except Exception as e:
-                    logger.error(f"Unexpected OCR error on page {page_num + 1}: {e}")
-                    text = "[OCR failed - unexpected error]"
+                    logger.error(f"Hybrid text extraction failed on page {page_num + 1}: {e}")
+                    text = "[Text extraction failed]"
                     confidence = 0.0
+                    is_scanned = True
+            else:
+                # Fallback to simple PyMuPDF extraction
+                text = page.get_text()
+                is_scanned = len(text.strip()) < 10  # Arbitrary threshold
+                confidence = 1.0 if not is_scanned else 0.0
+                
+                # Traditional OCR fallback if needed
+                if is_scanned and request.perform_ocr:
+                    # Initialize OCR handler if needed
+                    if self.ocr_handler is None:
+                        self.ocr_handler = OCRHandler(
+                            language=request.ocr_language,
+                            min_confidence=request.min_confidence
+                        )
+                    
+                    try:
+                        # Perform OCR
+                        ocr_text, ocr_confidence = self.ocr_handler.process_page(page)
+                        
+                        if ocr_text and ocr_confidence >= request.min_confidence:
+                            text = ocr_text
+                            confidence = ocr_confidence
+                            logger.info(
+                                f"OCR successful for page {page_num + 1} "
+                                f"(confidence: {confidence:.2f})"
+                            )
+                        else:
+                            text = "[OCR failed - low confidence]"
+                            confidence = ocr_confidence
+                            logger.warning(
+                                f"OCR failed for page {page_num + 1} - "
+                                f"confidence {ocr_confidence:.2f} below threshold"
+                            )
+                            
+                    except OCRError as e:
+                        logger.error(f"OCR error on page {page_num + 1}: {e}")
+                        text = "[OCR failed - error]"
+                        confidence = 0.0
+                    except Exception as e:
+                        logger.error(f"Unexpected OCR error on page {page_num + 1}: {e}")
+                        text = "[OCR failed - unexpected error]"
+                        confidence = 0.0
             
             # Check for tables and images
             has_tables = self._detect_tables(page)

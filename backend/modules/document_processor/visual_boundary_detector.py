@@ -52,6 +52,7 @@ class BoundaryScore:
     special_features_score: float = 0.0
     confidence: float = 0.0
     reasons: List[str] = None
+    boundary_threshold: float = 0.20  # Configurable threshold
     
     def __post_init__(self):
         if self.reasons is None:
@@ -60,7 +61,7 @@ class BoundaryScore:
     @property
     def is_boundary(self) -> bool:
         """Determine if this score indicates a boundary."""
-        return self.total_score > 0.6  # Threshold can be tuned
+        return self.total_score > self.boundary_threshold
 
 
 class VisualBoundaryDetector:
@@ -69,13 +70,15 @@ class VisualBoundaryDetector:
     def __init__(self, 
                  cache_dir: str = ".boundary_cache",
                  model_name: str = "clip-ViT-B-32",
-                 device: str = None):
+                 device: str = None,
+                 boundary_threshold: float = 0.20):
         """Initialize the visual boundary detector.
         
         Args:
             cache_dir: Directory for caching embeddings
             model_name: Sentence transformer model to use
             device: Device for model inference (cuda/cpu)
+            boundary_threshold: Threshold for is_boundary detection (default 0.20)
         """
         # Initialize model
         logger.info(f"Loading visual model: {model_name}")
@@ -93,16 +96,17 @@ class VisualBoundaryDetector:
         )
         
         # Configuration
-        self.similarity_threshold = 0.7
+        self.similarity_threshold = 0.65  # Lowered for better boundary detection
+        self.boundary_threshold = boundary_threshold  # Configurable boundary threshold
         self.batch_size = 16
         self.target_dpi = 150  # Lower DPI for faster processing
         
         # Weights for scoring
         self.weights = {
-            'visual_similarity': 0.4,
-            'layout_change': 0.3,
-            'pattern_match': 0.2,
-            'special_features': 0.1
+            'visual_similarity': 0.6,  # Increased for scanned docs
+            'layout_change': 0.2,      # Reduced as it's not working well for scans
+            'pattern_match': 0.15,     # Still important when detected
+            'special_features': 0.05   # Minor contribution
         }
     
     def detect_boundaries(self, 
@@ -273,7 +277,8 @@ class VisualBoundaryDetector:
                     page_num=i,
                     total_score=1.0,
                     confidence=1.0,
-                    reasons=["First page"]
+                    reasons=["First page"],
+                    boundary_threshold=self.boundary_threshold
                 )
             else:
                 score = self._compute_page_boundary_score(
@@ -289,7 +294,7 @@ class VisualBoundaryDetector:
                                     curr_features: PageFeatures,
                                     page_num: int) -> BoundaryScore:
         """Compute boundary score between two pages."""
-        score = BoundaryScore(page_num=page_num, total_score=0.0)
+        score = BoundaryScore(page_num=page_num, total_score=0.0, boundary_threshold=self.boundary_threshold)
         
         # Visual similarity
         if (prev_features.visual_embedding is not None and 
@@ -459,15 +464,17 @@ class VisualBoundaryDetector:
             images = page.get_images()
             for img in images:
                 try:
-                    img_rects = page.get_image_bbox(img)
+                    # img is a tuple (xref, smask, width, height, bpc, colorspace, alt_colorspace, name, filter, bbox)
+                    # We need the xref (first element) for get_image_bbox
+                    xref = img[0]
+                    img_rects = page.get_image_bbox(xref)
+                    if isinstance(img_rects, fitz.Rect):
+                        img_rects = [img_rects]
                     for rect in img_rects:
                         if top_region.intersects(rect):
                             return True
-                except fitz.FitzError as e:
-                    logger.debug(f"Failed to get image bbox: {e}")
-                    continue
                 except Exception as e:
-                    logger.warning(f"Unexpected error checking image bbox: {e}")
+                    logger.debug(f"Failed to get image bbox: {e}")
                     continue
             
             # Check for heavy text/graphics in header
@@ -498,11 +505,8 @@ class VisualBoundaryDetector:
             drawings = page.get_drawings()
             # Many drawing elements suggest technical content
             return len(drawings) > 50
-        except fitz.FitzError as e:
-            logger.debug(f"Failed to get drawings: {e}")
-            return False
         except Exception as e:
-            logger.warning(f"Unexpected error detecting drawings: {e}")
+            logger.debug(f"Failed to get drawings: {e}")
             return False
     
     def _get_cache_key(self, pdf_name: str, page_num: int) -> str:

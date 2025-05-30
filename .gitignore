@@ -121,6 +121,11 @@ storage/database/
 .boundary_cache/
 .test_boundary_cache/
 
+# OCR debug output and testing
+ocr_debug_output/
+preprocessing_debug/
+ocr_test_results.json
+
 # Documentation build
 docs/_build/
 docs/.sphinx/
