@@ -252,7 +252,9 @@ class DocumentClassifier:
             phrase_matches = [p for p in features.key_phrases if p in phrases]
             if phrase_matches:
                 score = len(phrase_matches) / len(phrases)
-                scores[doc_type] = scores.get(doc_type, 0) + score * 0.3
+                # EMAIL patterns get higher weight since they're structural
+                weight = 0.6 if doc_type == DocumentType.EMAIL else 0.3
+                scores[doc_type] = scores.get(doc_type, 0) + score * weight
         
         # Structural scoring
         if features.has_amounts:

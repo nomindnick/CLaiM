@@ -197,10 +197,10 @@ class HybridBoundaryDetector:
         """Merge pattern and visual detection results.
         
         Strategy:
-        1. If results are similar, use visual (more accurate)
-        2. If very different, analyze disagreements
-        3. Prefer visual for scanned documents
-        4. Keep high-confidence pattern boundaries
+        1. Check average confidence of pattern detection
+        2. If pattern detection has high confidence, prefer it
+        3. If pattern detection is poor, trust visual more
+        4. Merge high-confidence boundaries from both methods
         """
         pattern_boundaries = set(pattern_result.boundaries)
         visual_boundaries = set(visual_result.boundaries)
@@ -215,6 +215,19 @@ class HybridBoundaryDetector:
             f"{len(only_pattern)} pattern-only, {len(only_visual)} visual-only"
         )
         
+        # Calculate pattern detection quality
+        pattern_avg_conf = 0.0
+        if pattern_result.confidence_scores:
+            pattern_avg_conf = sum(pattern_result.confidence_scores.values()) / len(pattern_result.confidence_scores)
+        
+        # If pattern detection has high confidence and reasonable number of boundaries, prefer it
+        # For CPRA/construction documents, many small documents are normal, so be more lenient
+        if (pattern_avg_conf > 0.7 and 
+            len(pattern_boundaries) > 0 and
+            len(pattern_boundaries) <= pdf_doc.page_count):  # Allow up to 1 document per page
+            logger.info(f"High-confidence pattern detection (avg: {pattern_avg_conf:.3f}), preferring pattern results")
+            return pattern_result
+        
         # If high agreement, trust visual
         if len(overlap) / max(len(pattern_boundaries), 1) > 0.7:
             logger.info("High agreement between methods, using visual results")
@@ -223,7 +236,7 @@ class HybridBoundaryDetector:
         # Otherwise, merge intelligently
         merged_boundaries = list(overlap)
         
-        # Add high-confidence pattern boundaries
+        # Add high-confidence pattern boundaries (lowered threshold since pattern detection is working well)
         for boundary in only_pattern:
             start, end = boundary
             avg_confidence = sum(
@@ -231,17 +244,19 @@ class HybridBoundaryDetector:
                 for p in range(start, end + 1)
             ) / max(1, end - start + 1)
             
-            if avg_confidence > 0.8:
+            # Lower threshold for pattern boundaries when pattern detection is generally good
+            threshold = 0.6 if pattern_avg_conf > 0.7 else 0.8
+            if avg_confidence > threshold:
                 merged_boundaries.append(boundary)
                 logger.debug(f"Keeping pattern boundary {boundary} with confidence {avg_confidence:.2f}")
         
-        # Add visual boundaries with good scores
+        # Add visual boundaries with good scores (stricter threshold since visual disagreed with patterns)
         if visual_result.visual_scores:
             for boundary in only_visual:
                 start, _ = boundary
                 if start < len(visual_result.visual_scores):
                     score = visual_result.visual_scores[start]
-                    if score.total_score > 0.7 and score.confidence > 0.6:
+                    if score.total_score > 0.8 and score.confidence > 0.7:  # Higher threshold
                         merged_boundaries.append(boundary)
                         logger.debug(
                             f"Adding visual boundary {boundary} with score "
@@ -252,13 +267,15 @@ class HybridBoundaryDetector:
         merged_boundaries = sorted(merged_boundaries)
         merged_boundaries = self._cleanup_overlapping_boundaries(merged_boundaries)
         
-        # Combine confidence scores
+        # Combine confidence scores - weight pattern more heavily if it's performing well
+        pattern_weight = 0.7 if pattern_avg_conf > 0.7 else 0.3
+        visual_weight = 1.0 - pattern_weight
+        
         merged_confidence = {}
         for page_num in range(pdf_doc.page_count):
             pattern_conf = pattern_result.confidence_scores.get(page_num, 0)
             visual_conf = visual_result.confidence_scores.get(page_num, 0)
-            # Weight visual more heavily
-            merged_confidence[page_num] = 0.3 * pattern_conf + 0.7 * visual_conf
+            merged_confidence[page_num] = pattern_weight * pattern_conf + visual_weight * visual_conf
         
         return HybridBoundaryResult(
             boundaries=merged_boundaries,
@@ -283,8 +300,9 @@ class HybridBoundaryDetector:
         if page_count < 10:
             return False
         
-        # If more than 1 document per 3 pages, might be over-splitting
-        return len(result.boundaries) > page_count / 3
+        # For construction litigation documents, many boundaries are normal
+        # Only consider suspicious if more than 1 document per 1.5 pages (very aggressive splitting)
+        return len(result.boundaries) > page_count / 1.5
     
     def _is_likely_scanned(self, pdf_doc: fitz.Document) -> bool:
         """Quick check if PDF is likely scanned."""
