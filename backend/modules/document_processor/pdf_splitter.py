@@ -18,6 +18,7 @@ from .models import (
 )
 from .boundary_detector import BoundaryDetector
 from .ocr_handler import OCRHandler
+from .improved_ocr_handler import ImprovedOCRHandler
 from .hybrid_boundary_detector import HybridBoundaryDetector, DetectionLevel
 from .hybrid_text_extractor import HybridTextExtractor, TextExtractionMethod
 # Lazy import to avoid circular dependencies
@@ -72,9 +73,10 @@ class PDFSplitter:
             
             # Initialize OCR handler if needed (for boundary detection on scanned docs)
             if request.perform_ocr and self.ocr_handler is None:
-                self.ocr_handler = OCRHandler(
+                # Use improved OCR handler for much better accuracy on CPRA-style documents
+                self.ocr_handler = ImprovedOCRHandler(
                     language=request.ocr_language,
-                    min_confidence=0.3  # Lower threshold for boundary detection
+                    min_confidence=0.4  # Slightly higher threshold due to improved accuracy
                 )
             
             # Initialize boundary detector

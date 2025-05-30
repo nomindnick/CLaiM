@@ -24,6 +24,12 @@ class BoundaryDetector:
             re.compile(r"^Subject:\s*", re.IGNORECASE | re.MULTILINE),
             re.compile(r"^Date:\s*\w+,\s*\w+\s*\d+", re.IGNORECASE | re.MULTILINE),
             re.compile(r"^(RE:|FW:|Fwd:)\s*", re.IGNORECASE | re.MULTILINE),
+            # More flexible email patterns for OCR
+            re.compile(r"From\s*:\s*[^\n]*", re.IGNORECASE | re.MULTILINE),
+            re.compile(r"To\s*:\s*[^\n]*", re.IGNORECASE | re.MULTILINE),
+            re.compile(r"Subject\s*:\s*[^\n]*", re.IGNORECASE | re.MULTILINE),
+            re.compile(r"Sent\s*:\s*[^\n]*", re.IGNORECASE | re.MULTILINE),
+            re.compile(r"Date\s*:\s*[^\n]*", re.IGNORECASE | re.MULTILINE),
             
             # Submittal/Transmittal patterns
             re.compile(r"^\s*SUBMITTAL\s*TRANSMITTAL", re.IGNORECASE | re.MULTILINE),
@@ -31,6 +37,9 @@ class BoundaryDetector:
             re.compile(r"^TRANSMITTAL\s*$", re.IGNORECASE | re.MULTILINE),
             re.compile(r"SHOP\s+DRAWING.*SUBMITTAL", re.IGNORECASE),
             re.compile(r"Reference\s*Number:\s*\d+", re.IGNORECASE),
+            re.compile(r"Submittal\s*#?\s*\d+", re.IGNORECASE),
+            re.compile(r"Transmitted\s*To\s*:", re.IGNORECASE),
+            re.compile(r"Transmitted\s*By\s*:", re.IGNORECASE),
             
             # Payment/SOV patterns
             re.compile(r"APPLICATION\s+AND\s+CERTIFICATE\s+FOR\s+PAYMENT", re.IGNORECASE),
@@ -44,6 +53,9 @@ class BoundaryDetector:
             re.compile(r"^\s*SHIPPING", re.IGNORECASE | re.MULTILINE),
             re.compile(r"Ship\s+To:", re.IGNORECASE),
             re.compile(r"Sold\s+To:", re.IGNORECASE),
+            re.compile(r"Bill\s+To:", re.IGNORECASE),
+            re.compile(r"Order\s*#?\s*\d+", re.IGNORECASE),
+            re.compile(r"Sales\s+Order\s+Packing\s+Slip", re.IGNORECASE),
             
             # RFI patterns
             re.compile(r"REQUEST\s+FOR\s+INFORMATION", re.IGNORECASE),
@@ -142,7 +154,7 @@ class BoundaryDetector:
                     try:
                         logger.debug(f"Performing OCR on page {page_num + 1} for boundary detection")
                         ocr_text, confidence = self.ocr_handler.process_page(page, dpi=200)  # Lower DPI for faster processing
-                        if confidence > 0.3:  # Lower threshold for boundary detection
+                        if confidence > 0.2:  # Even lower threshold for boundary detection
                             text = ocr_text
                             ocr_cache[page_num] = text
                             logger.debug(f"OCR text extracted with confidence {confidence:.2f}")
@@ -197,18 +209,80 @@ class BoundaryDetector:
         
         # Check for very strong email indicators first
         strong_email_patterns = [
+            # Standard email headers
             re.compile(r"From:\s*.*@", re.IGNORECASE),
             re.compile(r"To:\s*.*@", re.IGNORECASE),
             re.compile(r"Sent:\s*\w+,\s*\w+\s*\d+", re.IGNORECASE),
+            # OCR-friendly patterns (may have spacing issues)
+            re.compile(r"From\s*:\s*[^\n]*@[^\n]*", re.IGNORECASE),
+            re.compile(r"To\s*:\s*[^\n]*@[^\n]*", re.IGNORECASE),
+            re.compile(r"CC\s*:\s*[^\n]*@[^\n]*", re.IGNORECASE),
+            re.compile(r"Subject\s*:", re.IGNORECASE),
+            re.compile(r"Sent\s*:\s*\w+", re.IGNORECASE),
+            # Email reply indicators
+            re.compile(r"^(RE|FW|Fwd)\s*:", re.IGNORECASE | re.MULTILINE),
+            re.compile(r"^(Reply|Forward)\s*:", re.IGNORECASE | re.MULTILINE),
             # More flexible email date patterns for OCR text
-            re.compile(r"(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),\s+\w+\s+\d{1,2},\s+\d{4}", re.IGNORECASE),
+            re.compile(r"(Mon|Tue|Wed|Thu|Fri|Sat|Sun|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),?\s+\w+\s+\d{1,2},?\s+\d{4}", re.IGNORECASE),
             re.compile(r"\d{1,2}/\d{1,2}/\d{4}\s+\d{1,2}:\d{2}\s*(AM|PM)", re.IGNORECASE),
+            # Email signature patterns that are strong indicators of email end
+            re.compile(r"[\w\s]+@[\w\.]+\.(com|org|net|edu)", re.IGNORECASE),
+            # Email thread separators
+            re.compile(r"_{5,}", re.IGNORECASE),  # Long underlines often separate emails
+            re.compile(r"-{5,}", re.IGNORECASE),  # Long dashes often separate emails
         ]
         
         for pattern in strong_email_patterns:
             if pattern.search(text[:800]):  # Check first 800 chars for email headers (OCR might be spread out)
                 logger.info(f"Page {page_num + 1}: Strong email pattern detected")
                 return True
+        
+        # Additional fallback patterns for OCR-challenged text
+        basic_document_indicators = [
+            r"@\w+\.(com|org|net|edu)",  # Email addresses anywhere
+            r"\d{1,2}/\d{1,2}/\d{4}",   # Dates
+            r"#\s*\d+",                 # Any numbered reference
+            r"To\s*:",                  # Basic "To:" pattern
+            r"From\s*:",                # Basic "From:" pattern
+            r"Date\s*:",                # Basic "Date:" pattern
+            r"Subject\s*:",             # Basic "Subject:" pattern
+            r"Project\s*:",             # Project references
+            r"Invoice",                 # Invoice indicators
+            r"Page\s*\d+",             # Page numbers
+            r"Transmittal",            # Transmittal indicators
+        ]
+        
+        for pattern_str in basic_document_indicators:
+            pattern = re.compile(pattern_str, re.IGNORECASE)
+            if pattern.search(text[:400]):  # Check first 400 chars
+                # But only trigger if this looks like start of page content
+                if page_num == 0 or self._seems_like_document_start(text):
+                    logger.info(f"Page {page_num + 1}: Basic document indicator found: {pattern_str}")
+                    return True
+        
+        # More aggressive boundary detection - look for common document transitions
+        # that the conservative approach is missing
+        if page_num > 0:
+            aggressive_boundary_indicators = [
+                r"Page\s*1\s*of\s*\d+",        # New document starting at page 1
+                r"^(From|To|Subject)\s*:",     # Email headers at line start
+                r"^\d{1,2}/\d{1,2}/\d{4}",    # Date at start of line
+                r"^[A-Z\s]{10,}$",             # All caps headers (like document titles)
+                r"Transmittal\s*#",            # Transmittal numbers
+                r"Invoice\s*#",                # Invoice numbers
+                r"Application\s*(and|&)",      # Payment applications
+                r"Schedule\s*of\s*Values",     # SOV documents
+                r"Request\s*for\s*Information", # RFI documents
+                r"Cost\s*Proposal",            # Cost proposals
+                r"Packing\s*Slip",             # Shipping documents
+                r"Sales\s*Order",              # Sales orders
+            ]
+            
+            for pattern_str in aggressive_boundary_indicators:
+                pattern = re.compile(pattern_str, re.IGNORECASE | re.MULTILINE)
+                if pattern.search(text[:600]):  # Check first 600 chars
+                    logger.info(f"Page {page_num + 1}: Aggressive boundary indicator found: {pattern_str}")
+                    return True
         
         # Use construction-specific pattern detection
         doc_types = detect_document_type(text)
@@ -457,6 +531,36 @@ class BoundaryDetector:
                 logger.debug(f"Page {page_num + 1}: Text density change {prev_density} -> {curr_density}")
                 return True
         
+        return False
+    
+    def _seems_like_document_start(self, text: str) -> bool:
+        """Helper method to determine if text looks like the start of a document."""
+        # Look for patterns that suggest this is a document start, not continuation
+        start_indicators = [
+            r"^From\s*:",           # Email headers at start
+            r"^To\s*:",
+            r"^Subject\s*:",
+            r"^Date\s*:",
+            r"^\w+\s*:",            # Any field at start
+            r"^Page\s*1",           # Page 1 indicators  
+            r"^\d+\.\s*",           # Numbered list at start
+            r"^[A-Z][A-Z\s]+:",     # ALL CAPS headers
+            r"^INVOICE",            # Document type headers
+            r"^REQUEST",
+            r"^TRANSMITTAL",
+            r"^APPLICATION",
+            r"^SUBMITTAL",
+            r"^COST\s*PROPOSAL",
+        ]
+        
+        for pattern_str in start_indicators:
+            if re.match(pattern_str, text.strip(), re.IGNORECASE | re.MULTILINE):
+                return True
+        
+        # If text starts with capital letters and colons, likely a form
+        if re.match(r"^[A-Z\s]+:", text.strip()):
+            return True
+            
         return False
     
     def _post_process_boundaries(self, boundaries: List[Tuple[int, int]], 
