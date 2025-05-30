@@ -9,7 +9,7 @@ This module implements a smart text extraction strategy:
 """
 
 import logging
-from typing import Optional, Tuple, Dict, Any, List
+from typing import Optional, Tuple, Dict, Any, List, TYPE_CHECKING
 from enum import Enum
 import re
 import fitz  # PyMuPDF
@@ -52,7 +52,8 @@ class HybridTextExtractor:
                  language: str = "eng",
                  min_confidence: float = 0.6,
                  enable_easyocr: bool = False,
-                 enable_paddleocr: bool = False):
+                 enable_paddleocr: bool = False,
+                 ocr_handler: Optional[ImprovedOCRHandler] = None):
         """
         Initialize hybrid text extractor.
         
@@ -61,12 +62,16 @@ class HybridTextExtractor:
             min_confidence: Minimum confidence threshold for OCR results
             enable_easyocr: Enable EasyOCR as fallback (requires installation)
             enable_paddleocr: Enable PaddleOCR as fallback (requires installation)
+            ocr_handler: Existing OCR handler to reuse (for cache sharing)
         """
         self.language = language
         self.min_confidence = min_confidence
         
         # Initialize OCR handlers
-        self.tesseract_handler = ImprovedOCRHandler(language, min_confidence)
+        if ocr_handler is not None:
+            self.tesseract_handler = ocr_handler
+        else:
+            self.tesseract_handler = ImprovedOCRHandler(language, min_confidence)
         
         # Optional OCR engines (lazy initialization)
         self.easyocr_handler = None

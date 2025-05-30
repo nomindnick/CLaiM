@@ -7,13 +7,14 @@ import fitz  # PyMuPDF
 from loguru import logger
 
 from .ocr_handler import OCRHandler
+from .improved_ocr_handler import ImprovedOCRHandler
 from .construction_patterns import detect_document_type, is_strong_document_start
 
 
 class BoundaryDetector:
     """Detects document boundaries within large PDF files."""
     
-    def __init__(self, ocr_handler: Optional[OCRHandler] = None):
+    def __init__(self, ocr_handler: Optional[ImprovedOCRHandler] = None):
         self.ocr_handler = ocr_handler
         # Common document start patterns - prioritized by strength
         self.start_patterns = [

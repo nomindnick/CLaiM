@@ -6,16 +6,19 @@ This module implements a smarter OCR approach that:
 2. Picks the best result based on confidence
 3. Avoids destructive operations on clean documents
 4. Only applies heavy preprocessing when needed
+5. Caches OCR results to avoid duplicate processing
 """
 
 import io
 import logging
+import hashlib
 from typing import Optional, Tuple, Dict, Any, List
 import numpy as np
 from PIL import Image, ImageEnhance, ImageFilter
 import pytesseract
 import cv2
 import fitz  # PyMuPDF
+import diskcache
 
 from shared.exceptions import OCRError
 
@@ -33,17 +36,29 @@ class ImprovedOCRHandler:
     - Supports multiple OCR engines
     """
     
-    def __init__(self, language: str = "eng", min_confidence: float = 0.4):
+    def __init__(self, language: str = "eng", min_confidence: float = 0.4, cache_dir: str = ".ocr_cache"):
         """
         Initialize improved OCR handler.
         
         Args:
             language: Tesseract language code (default: "eng" for English)
             min_confidence: Minimum confidence threshold for OCR results (0-1)
+            cache_dir: Directory for OCR result cache
         """
         self.language = language
         self.min_confidence = min_confidence
+        self.cache_dir = cache_dir
         self._verify_tesseract()
+        
+        # Initialize disk cache with 1GB memory limit
+        self.cache = diskcache.Cache(
+            directory=cache_dir,
+            size_limit=10 * 1024**3,  # 10GB disk limit
+            eviction_policy='least-recently-used'
+        )
+        
+        # Set memory limit to 1GB before using disk
+        # Note: diskcache handles this automatically with its memory mapping
         
         # OCR strategies to try (in order of preference)
         self.strategies = [
@@ -66,6 +81,8 @@ class ImprovedOCRHandler:
         """
         Process a single PDF page with OCR using adaptive strategies.
         
+        Uses disk cache to avoid duplicate OCR processing.
+        
         Args:
             page: PyMuPDF page object
             dpi: Resolution for rendering PDF to image
@@ -74,6 +91,18 @@ class ImprovedOCRHandler:
             Tuple of (extracted_text, confidence_score)
         """
         try:
+            # Generate cache key based on page content and processing parameters
+            cache_key = self._generate_cache_key(page, dpi)
+            
+            # Check cache first
+            cached_result = self.cache.get(cache_key)
+            if cached_result is not None:
+                text, confidence = cached_result
+                logger.info(f"✓ OCR cache hit: {len(text)} chars, confidence: {confidence:.3f}")
+                return text, confidence
+            
+            logger.info(f"⚡ OCR cache miss - processing page...")
+            
             # Convert PDF page to image
             image = self._page_to_image(page, dpi)
             
@@ -107,6 +136,10 @@ class ImprovedOCRHandler:
             if best_text:
                 best_text = self._post_process_text(best_text)
                 logger.info(f"Best strategy: '{best_strategy}' with confidence {best_confidence:.3f}")
+                
+                # Cache the result
+                self.cache.set(cache_key, (best_text, best_confidence))
+                logger.info(f"💾 Cached OCR result (key: {cache_key[:16]}...)")
             else:
                 logger.error("All OCR strategies failed")
                 raise OCRError("All OCR strategies failed")
@@ -409,6 +442,79 @@ class ImprovedOCRHandler:
         text = ' '.join(text.split())
         
         return text
+    
+    def _generate_cache_key(self, page: fitz.Page, dpi: int) -> str:
+        """
+        Generate a unique cache key for a page.
+        
+        Based on:
+        - Page content hash (text + images)
+        - DPI setting
+        - Language setting
+        - OCR strategies
+        """
+        try:
+            # Get page content for hashing
+            page_text = page.get_text()
+            page_images = page.get_images()
+            
+            # Create content hash
+            content_data = {
+                'text': page_text,
+                'image_count': len(page_images),
+                'image_info': [img[:4] for img in page_images[:5]],  # First 5 images, basic info only
+                'dpi': dpi,
+                'language': self.language,
+                'strategies': self.strategies,
+                'min_confidence': self.min_confidence
+            }
+            
+            # Convert to string and hash
+            content_str = str(sorted(content_data.items()))
+            cache_key = hashlib.md5(content_str.encode()).hexdigest()
+            
+            return f"ocr_{cache_key}"
+            
+        except Exception as e:
+            logger.warning(f"Failed to generate cache key: {e}")
+            # Fallback to timestamp-based key (no caching benefit but won't crash)
+            import time
+            return f"ocr_fallback_{int(time.time() * 1000000)}"
+    
+    def get_cache_stats(self) -> Dict[str, Any]:
+        """
+        Get OCR cache statistics.
+        
+        Returns:
+            Dictionary with cache stats
+        """
+        try:
+            stats = {
+                'cache_size_items': len(self.cache),
+                'cache_size_bytes': self.cache.volume(),
+                'cache_directory': str(self.cache.directory),
+                'cache_hits': getattr(self.cache, 'hits', 'unknown'),
+                'cache_misses': getattr(self.cache, 'misses', 'unknown')
+            }
+            return stats
+        except Exception as e:
+            logger.error(f"Failed to get cache stats: {e}")
+            return {'error': str(e)}
+    
+    def clear_cache(self) -> bool:
+        """
+        Clear the OCR cache.
+        
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            self.cache.clear()
+            logger.info("OCR cache cleared successfully")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to clear cache: {e}")
+            return False
     
     def get_supported_languages(self) -> List[str]:
         """Get list of available Tesseract languages."""

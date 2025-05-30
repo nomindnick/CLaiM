@@ -74,9 +74,11 @@ class PDFSplitter:
             # Initialize OCR handler if needed (for boundary detection on scanned docs)
             if request.perform_ocr and self.ocr_handler is None:
                 # Use improved OCR handler for much better accuracy on CPRA-style documents
+                # Share cache directory for all OCR operations
                 self.ocr_handler = ImprovedOCRHandler(
                     language=request.ocr_language,
-                    min_confidence=0.4  # Slightly higher threshold due to improved accuracy
+                    min_confidence=0.4,  # Slightly higher threshold due to improved accuracy
+                    cache_dir=".ocr_cache"  # Shared cache directory
                 )
             
             # Initialize boundary detector
@@ -222,7 +224,8 @@ class PDFSplitter:
                 if self.text_extractor is None:
                     self.text_extractor = HybridTextExtractor(
                         language=request.ocr_language,
-                        min_confidence=request.min_confidence
+                        min_confidence=request.min_confidence,
+                        ocr_handler=self.ocr_handler  # Share the OCR handler for caching
                     )
                 
                 try:
