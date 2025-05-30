@@ -20,7 +20,7 @@ opencv-python==4.9.0.80
 # AI/ML dependencies
 transformers==4.37.0
 torch==2.5.1
-sentence-transformers==2.2.2
+sentence-transformers==3.0.1
 numpy==1.26.3
 scikit-learn==1.4.0
 
