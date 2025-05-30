@@ -111,6 +111,9 @@ class PDFSplitter:
                     boundaries = self.boundary_detector.detect_boundaries(pdf_doc)
                     logger.info(f"Found {len(boundaries)} document boundaries")
                 
+                # Fill gaps in boundaries to ensure all pages are covered
+                boundaries = self._fill_boundary_gaps(boundaries, result.total_pages)
+                
                 # Extract individual documents
                 for i, (start, end) in enumerate(boundaries):
                     if request.max_pages and i >= request.max_pages:
@@ -287,6 +290,59 @@ class PDFSplitter:
             pass
         
         return document
+    
+    def _fill_boundary_gaps(self, boundaries: List[Tuple[int, int]], total_pages: int) -> List[Tuple[int, int]]:
+        """Fill gaps between detected boundaries to ensure all pages are covered.
+        
+        Args:
+            boundaries: List of (start, end) page ranges (0-indexed)
+            total_pages: Total number of pages in the PDF
+            
+        Returns:
+            Complete list of boundaries covering all pages
+        """
+        if not boundaries:
+            # No boundaries found, treat entire PDF as one document
+            return [(0, total_pages - 1)]
+        
+        # Sort boundaries by start page
+        sorted_boundaries = sorted(boundaries)
+        filled_boundaries = []
+        
+        # Check if there's a gap before the first boundary
+        first_start = sorted_boundaries[0][0]
+        if first_start > 0:
+            filled_boundaries.append((0, first_start - 1))
+            logger.info(f"Added gap-filling boundary: pages 1-{first_start}")
+        
+        # Add the first boundary
+        filled_boundaries.append(sorted_boundaries[0])
+        
+        # Check for gaps between boundaries and fill them
+        for i in range(1, len(sorted_boundaries)):
+            prev_end = filled_boundaries[-1][1]
+            current_start = sorted_boundaries[i][0]
+            
+            # If there's a gap, fill it
+            if current_start > prev_end + 1:
+                gap_start = prev_end + 1
+                gap_end = current_start - 1
+                filled_boundaries.append((gap_start, gap_end))
+                logger.info(f"Added gap-filling boundary: pages {gap_start + 1}-{gap_end + 1}")
+            
+            # Add the current boundary
+            filled_boundaries.append(sorted_boundaries[i])
+        
+        # Check if there's a gap after the last boundary
+        last_end = filled_boundaries[-1][1]
+        if last_end < total_pages - 1:
+            gap_start = last_end + 1
+            gap_end = total_pages - 1
+            filled_boundaries.append((gap_start, gap_end))
+            logger.info(f"Added gap-filling boundary: pages {gap_start + 1}-{gap_end + 1}")
+        
+        logger.info(f"Boundary gap filling: {len(boundaries)} original -> {len(filled_boundaries)} total boundaries")
+        return filled_boundaries
     
     def _detect_tables(self, page: fitz.Page) -> bool:
         """Detect if a page contains tables.

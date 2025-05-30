@@ -223,6 +223,14 @@ storage.save(document, embeddings)
 
 ## Recently Completed Tasks
 <!-- Claude Code should update this section after completing work -->
+- [2025-05-30] **CRITICAL FIX: Resolved Missing Pages in PDF Splitting** - Implemented gap-filling boundary detection
+  - **Problem**: Visual boundary detection was only covering 50% of pages (18/36), leaving 18 pages missing from document extraction
+  - **Root Cause**: Visual detection found only 4 major document boundaries but had no fallback for uncovered page ranges
+  - **Solution**: Added `_fill_boundary_gaps()` method that analyzes detected boundaries and creates additional boundaries to cover all missing pages
+  - **Results**: Now achieves 100% page coverage (36/36 pages) while preserving high-quality visual detection for major documents
+  - **Impact**: Ensures attorneys never lose pages when processing construction litigation documents
+  - **Files Modified**: `backend/modules/document_processor/pdf_splitter.py` (added gap-filling algorithm)
+  - **Testing**: Created comprehensive test scripts to verify 100% page coverage across all detection levels
 - [2025-05-29] Set up initial project structure with full directory tree
 - [2025-05-29] Created comprehensive documentation (README, CLAUDE.md, specs)
 - [2025-05-29] Initialized Git repository with .gitignore and LFS support
