@@ -269,7 +269,7 @@ class StorageManager:
         
         return True
     
-    def bulk_delete_documents(self, document_ids: List[str], delete_files: bool = True) -> Dict[str, Any]:
+    def bulk_delete_documents(self, document_ids: List[str], delete_files: bool = True) -> BulkDeleteResult:
         """Delete multiple documents from storage.
         
         Args:
@@ -279,8 +279,6 @@ class StorageManager:
         Returns:
             Bulk deletion results
         """
-        from .models import BulkDeleteResult
-        
         start_time = datetime.utcnow()
         successful_deletions = 0
         failed_deletions = 0

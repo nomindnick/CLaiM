@@ -62,18 +62,6 @@ async def search_documents(
         raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
 
 
-@router.delete("/documents/{document_id}")
-async def delete_document(
-    document_id: str,
-    delete_files: bool = Query(True, description="Delete associated files"),
-    storage: StorageManager = Depends(get_storage_manager),
-):
-    """Delete document from storage."""
-    if not storage.delete_document(document_id, delete_files):
-        raise HTTPException(status_code=404, detail="Document not found")
-    return {"message": "Document deleted successfully"}
-
-
 @router.delete("/documents/bulk", response_model=BulkDeleteResult)
 async def bulk_delete_documents(
     request: BulkDeleteRequest = Body(...),
@@ -90,6 +78,18 @@ async def bulk_delete_documents(
     except Exception as e:
         logger.error(f"Bulk delete failed: {e}")
         raise HTTPException(status_code=500, detail=f"Bulk delete failed: {str(e)}")
+
+
+@router.delete("/documents/{document_id}")
+async def delete_document(
+    document_id: str,
+    delete_files: bool = Query(True, description="Delete associated files"),
+    storage: StorageManager = Depends(get_storage_manager),
+):
+    """Delete document from storage."""
+    if not storage.delete_document(document_id, delete_files):
+        raise HTTPException(status_code=404, detail="Document not found")
+    return {"message": "Document deleted successfully"}
 
 
 @router.get("/stats", response_model=StorageStats)
