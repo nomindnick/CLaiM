@@ -15,7 +15,9 @@ import {
   AlertCircle,
   Eye,
   Trash2,
-  MoreVertical
+  MoreVertical,
+  X,
+  Check
 } from 'lucide-react'
 
 // Document type enum matching backend
@@ -110,6 +112,9 @@ export const DocumentList: React.FC = () => {
   const [showFilters, setShowFilters] = useState(false)
   const [deletingDocuments, setDeletingDocuments] = useState<Set<string>>(new Set())
   const [dropdownOpen, setDropdownOpen] = useState<string | null>(null)
+  const [selectedDocuments, setSelectedDocuments] = useState<Set<string>>(new Set())
+  const [bulkDeleting, setBulkDeleting] = useState(false)
+  const [showBulkDeleteDialog, setShowBulkDeleteDialog] = useState(false)
   
   const documentsPerPage = 20
   
@@ -276,6 +281,30 @@ export const DocumentList: React.FC = () => {
     setCurrentPage(1)
   }
 
+  // Bulk selection handlers
+  const toggleDocumentSelection = (documentId: string) => {
+    setSelectedDocuments(prev => {
+      const newSet = new Set(prev)
+      if (newSet.has(documentId)) {
+        newSet.delete(documentId)
+      } else {
+        newSet.add(documentId)
+      }
+      return newSet
+    })
+  }
+
+  const selectAllDocuments = () => {
+    setSelectedDocuments(new Set(documents.map(doc => doc.id)))
+  }
+
+  const clearSelection = () => {
+    setSelectedDocuments(new Set())
+  }
+
+  const isAllSelected = documents.length > 0 && selectedDocuments.size === documents.length
+  const isIndeterminate = selectedDocuments.size > 0 && selectedDocuments.size < documents.length
+
   // Document actions
   const viewDocument = (documentId: string) => {
     window.open(`/api/v1/storage/documents/${documentId}/pdf`, '_blank')
@@ -312,6 +341,48 @@ export const DocumentList: React.FC = () => {
         newSet.delete(documentId)
         return newSet
       })
+    }
+  }
+
+  const bulkDeleteDocuments = async () => {
+    const selectedIds = Array.from(selectedDocuments)
+    if (selectedIds.length === 0) return
+
+    setBulkDeleting(true)
+    setShowBulkDeleteDialog(false)
+
+    try {
+      const response = await axios.delete('/api/v1/storage/documents/bulk', {
+        data: {
+          document_ids: selectedIds,
+          delete_files: true
+        }
+      })
+
+      const result = response.data
+      
+      // Remove successfully deleted documents from local state
+      if (result.successful_deletions > 0) {
+        setDocuments(prev => prev.filter(doc => !selectedIds.includes(doc.id)))
+        setTotalDocuments(prev => prev - result.successful_deletions)
+        setSelectedDocuments(new Set())
+      }
+
+      // Show results
+      if (result.failed_deletions > 0) {
+        const errorMessages = result.errors.map((err: any) => `${err.document_id}: ${err.error}`).join('\n')
+        alert(`Bulk delete completed with some errors:\n\nSuccessful: ${result.successful_deletions}\nFailed: ${result.failed_deletions}\n\nErrors:\n${errorMessages}`)
+      } else {
+        alert(`Successfully deleted ${result.successful_deletions} documents`)
+      }
+
+      // Refresh the list
+      fetchDocuments()
+    } catch (err: any) {
+      alert(`Failed to delete documents: ${err.response?.data?.detail || err.message}`)
+      console.error('Error bulk deleting documents:', err)
+    } finally {
+      setBulkDeleting(false)
     }
   }
 
@@ -419,6 +490,46 @@ export const DocumentList: React.FC = () => {
         </button>
       </div>
 
+      {/* Bulk actions toolbar */}
+      {selectedDocuments.size > 0 && (
+        <div className="mb-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-4">
+              <span className="text-sm font-medium text-blue-900">
+                {selectedDocuments.size} document{selectedDocuments.size === 1 ? '' : 's'} selected
+              </span>
+              <button
+                onClick={clearSelection}
+                className="text-sm text-blue-700 hover:text-blue-900 flex items-center gap-1"
+              >
+                <X className="w-4 h-4" />
+                Clear selection
+              </button>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setShowBulkDeleteDialog(true)}
+                disabled={bulkDeleting}
+                className={`
+                  flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors
+                  ${bulkDeleting
+                    ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                    : 'bg-red-600 text-white hover:bg-red-700'
+                  }
+                `}
+              >
+                {bulkDeleting ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Trash2 className="w-4 h-4" />
+                )}
+                Delete {selectedDocuments.size} document{selectedDocuments.size === 1 ? '' : 's'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Filters panel */}
       {showFilters && (
         <div className="mb-6 p-4 bg-gray-50 rounded-lg border border-gray-200">
@@ -508,6 +619,25 @@ export const DocumentList: React.FC = () => {
           <table className="w-full">
             <thead className="bg-gray-50 border-b border-gray-200">
               <tr>
+                <th className="px-6 py-3 text-left w-12">
+                  <div className="flex items-center">
+                    <input
+                      type="checkbox"
+                      checked={isAllSelected}
+                      ref={(input) => {
+                        if (input) input.indeterminate = isIndeterminate
+                      }}
+                      onChange={() => {
+                        if (isAllSelected || isIndeterminate) {
+                          clearSelection()
+                        } else {
+                          selectAllDocuments()
+                        }
+                      }}
+                      className="h-4 w-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                    />
+                  </div>
+                </th>
                 <th className="px-6 py-3 text-left">
                   <button
                     onClick={() => handleSort('title')}
@@ -564,7 +694,7 @@ export const DocumentList: React.FC = () => {
             <tbody className="divide-y divide-gray-200">
               {documents.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-6 py-12 text-center">
+                  <td colSpan={8} className="px-6 py-12 text-center">
                     <FileText className="w-12 h-12 text-gray-400 mx-auto mb-4" />
                     <p className="text-gray-900 font-medium mb-2">No documents found</p>
                     <p className="text-gray-600 text-sm">
@@ -583,8 +713,18 @@ export const DocumentList: React.FC = () => {
                   return (
                     <tr
                       key={doc.id}
-                      className="hover:bg-gray-50 transition-colors"
+                      className={`hover:bg-gray-50 transition-colors ${selectedDocuments.has(doc.id) ? 'bg-blue-50' : ''}`}
                     >
+                      <td className="px-6 py-4">
+                        <div className="flex items-center">
+                          <input
+                            type="checkbox"
+                            checked={selectedDocuments.has(doc.id)}
+                            onChange={() => toggleDocumentSelection(doc.id)}
+                            className="h-4 w-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                          />
+                        </div>
+                      </td>
                       <td className="px-6 py-4">
                         <div className="flex items-center gap-3">
                           <FileText className="w-5 h-5 text-gray-400 flex-shrink-0" />
@@ -769,6 +909,59 @@ export const DocumentList: React.FC = () => {
           </div>
         )}
       </div>
+
+      {/* Bulk delete confirmation dialog */}
+      {showBulkDeleteDialog && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="flex-shrink-0 w-8 h-8 bg-red-100 rounded-full flex items-center justify-center">
+                <Trash2 className="w-4 h-4 text-red-600" />
+              </div>
+              <h3 className="text-lg font-semibold text-gray-900">
+                Delete Selected Documents
+              </h3>
+            </div>
+            
+            <div className="mb-6">
+              <p className="text-sm text-gray-600 mb-4">
+                Are you sure you want to delete the following {selectedDocuments.size} document{selectedDocuments.size === 1 ? '' : 's'}? 
+                This action cannot be undone.
+              </p>
+              
+              <div className="max-h-32 overflow-y-auto bg-gray-50 rounded-lg p-3">
+                <ul className="space-y-1">
+                  {documents
+                    .filter(doc => selectedDocuments.has(doc.id))
+                    .map(doc => (
+                      <li key={doc.id} className="text-sm text-gray-700 flex items-center gap-2">
+                        <FileText className="w-3 h-3 text-gray-400 flex-shrink-0" />
+                        <span className="truncate">{doc.title}</span>
+                      </li>
+                    ))
+                  }
+                </ul>
+              </div>
+            </div>
+            
+            <div className="flex items-center justify-end gap-3">
+              <button
+                onClick={() => setShowBulkDeleteDialog(false)}
+                className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={bulkDeleteDocuments}
+                className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 flex items-center gap-2"
+              >
+                <Trash2 className="w-4 h-4" />
+                Delete {selectedDocuments.size} Document{selectedDocuments.size === 1 ? '' : 's'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

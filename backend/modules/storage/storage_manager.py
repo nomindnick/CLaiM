@@ -22,6 +22,8 @@ from .models import (
     StorageStats,
     BulkImportRequest,
     BulkImportResult,
+    BulkDeleteRequest,
+    BulkDeleteResult,
 )
 from .sqlite_handler import SQLiteHandler
 
@@ -266,6 +268,56 @@ class StorageManager:
         # TODO: Remove from vector store
         
         return True
+    
+    def bulk_delete_documents(self, document_ids: List[str], delete_files: bool = True) -> Dict[str, Any]:
+        """Delete multiple documents from storage.
+        
+        Args:
+            document_ids: List of document IDs to delete
+            delete_files: Whether to delete associated files
+            
+        Returns:
+            Bulk deletion results
+        """
+        from .models import BulkDeleteResult
+        
+        start_time = datetime.utcnow()
+        successful_deletions = 0
+        failed_deletions = 0
+        errors = []
+        
+        for document_id in document_ids:
+            try:
+                if self.delete_document(document_id, delete_files):
+                    successful_deletions += 1
+                    logger.info(f"Successfully deleted document: {document_id}")
+                else:
+                    failed_deletions += 1
+                    errors.append({
+                        "document_id": document_id,
+                        "error": "Document not found"
+                    })
+            except Exception as e:
+                failed_deletions += 1
+                errors.append({
+                    "document_id": document_id,
+                    "error": str(e)
+                })
+                logger.error(f"Failed to delete document {document_id}: {e}")
+        
+        end_time = datetime.utcnow()
+        delete_time = (end_time - start_time).total_seconds()
+        
+        result = BulkDeleteResult(
+            total_documents=len(document_ids),
+            successful_deletions=successful_deletions,
+            failed_deletions=failed_deletions,
+            errors=errors,
+            delete_time_seconds=delete_time
+        )
+        
+        logger.info(f"Bulk delete completed: {successful_deletions}/{len(document_ids)} successful")
+        return result
     
     def get_stats(self) -> StorageStats:
         """Get storage statistics."""

@@ -186,3 +186,18 @@ class BulkImportResult(BaseModel):
     errors: List[Dict[str, str]] = Field(default_factory=list)
     import_time_seconds: float
     documents_created: int
+
+
+class BulkDeleteRequest(BaseModel):
+    """Request for bulk document deletion."""
+    document_ids: List[str]
+    delete_files: bool = True
+
+
+class BulkDeleteResult(BaseModel):
+    """Result of bulk delete operation."""
+    total_documents: int
+    successful_deletions: int
+    failed_deletions: int
+    errors: List[Dict[str, str]] = Field(default_factory=list)
+    delete_time_seconds: float

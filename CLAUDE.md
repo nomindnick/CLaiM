@@ -223,6 +223,38 @@ storage.save(document, embeddings)
 
 ## Recently Completed Tasks
 <!-- Claude Code should update this section after completing work -->
+- [2025-05-30] **BULK DOCUMENT DELETION: Complete Multi-Selection Interface** - Implemented comprehensive bulk deletion functionality for attorney productivity
+  - **Problem**: Users had to delete documents one by one, requiring individual selection and confirmation for each document
+  - **Solution**: Built complete bulk selection and deletion system with professional UI/UX
+  - **Frontend Features**:
+    - **Multi-Selection Interface**: Added checkbox column to document table with individual and select-all functionality
+    - **Smart Select All**: Header checkbox with indeterminate state when partially selected
+    - **Bulk Actions Toolbar**: Blue toolbar appears when documents selected, showing count and actions
+    - **Confirmation Dialog**: Professional modal showing selected document list for review before deletion
+    - **Visual Feedback**: Selected rows highlighted in blue, loading states during operations
+    - **Clear Selection**: Easy way to deselect all documents
+  - **Backend Implementation**:
+    - **Bulk Delete API**: New `DELETE /api/v1/storage/documents/bulk` endpoint
+    - **BulkDeleteRequest/Result Models**: Structured request/response with error handling
+    - **Batch Processing**: Storage manager processes multiple deletions with individual error tracking
+    - **Detailed Results**: Returns success/failure counts and specific error messages
+  - **User Experience Improvements**:
+    - **Attorney-Friendly**: Intuitive checkbox interface familiar to legal professionals
+    - **Error Handling**: Detailed feedback on partial failures with specific error messages
+    - **Performance**: Efficient bulk operations reduce time from minutes to seconds
+    - **Safety**: Clear confirmation dialog prevents accidental deletions
+  - **Technical Benefits**:
+    - **Database Efficiency**: Single transaction for multiple deletions
+    - **File System Cleanup**: Automatically removes associated PDF files
+    - **Error Resilience**: Continues processing even if individual deletions fail
+    - **Comprehensive Logging**: Full audit trail of bulk operations
+  - **Files Enhanced**: 
+    - `storage/models.py` - Added BulkDeleteRequest and BulkDeleteResult models
+    - `storage/storage_manager.py` - Implemented bulk_delete_documents method
+    - `storage/router.py` - Added bulk delete API endpoint
+    - `DocumentList.tsx` - Complete UI overhaul with multi-selection interface
+  - **Impact**: Transforms document management from tedious individual deletions to efficient bulk operations, significantly improving attorney productivity
+  - **Production Ready**: Full error handling, loading states, and user feedback suitable for legal document workflows
 - [2025-05-30] **OCR CACHING SYSTEM: Eliminated Duplicate Processing Performance Issue** - Implemented high-performance disk-based OCR caching system
   - **Problem**: OCR was running twice (boundary detection + text extraction phases) causing unnecessary 50% processing time penalty
   - **Root Cause**: Boundary detection and text extraction were using separate OCR handler instances without shared cache

@@ -17,6 +17,8 @@ from .models import (
     StorageStats,
     BulkImportRequest,
     BulkImportResult,
+    BulkDeleteRequest,
+    BulkDeleteResult,
 )
 from .storage_manager import StorageManager
 
@@ -70,6 +72,24 @@ async def delete_document(
     if not storage.delete_document(document_id, delete_files):
         raise HTTPException(status_code=404, detail="Document not found")
     return {"message": "Document deleted successfully"}
+
+
+@router.delete("/documents/bulk", response_model=BulkDeleteResult)
+async def bulk_delete_documents(
+    request: BulkDeleteRequest = Body(...),
+    storage: StorageManager = Depends(get_storage_manager),
+):
+    """Delete multiple documents from storage."""
+    try:
+        result = storage.bulk_delete_documents(request.document_ids, request.delete_files)
+        
+        if result.failed_deletions > 0:
+            logger.warning(f"Bulk delete had {result.failed_deletions} failures")
+        
+        return result
+    except Exception as e:
+        logger.error(f"Bulk delete failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Bulk delete failed: {str(e)}")
 
 
 @router.get("/stats", response_model=StorageStats)
