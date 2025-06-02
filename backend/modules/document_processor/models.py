@@ -26,6 +26,9 @@ class DocumentType(str, Enum):
     MEMORANDUM = "memorandum"
     PAYMENT_APPLICATION = "payment_application"
     SCHEDULE = "schedule"
+    INSPECTION_REPORT = "inspection_report"  # Added for LLM classifier
+    PLANS_SPECIFICATIONS = "plans_specifications"  # Added for LLM classifier
+    OTHER = "other"  # Added for LLM classifier
     UNKNOWN = "unknown"
 
 
@@ -155,6 +158,11 @@ class PDFProcessingRequest(BaseModel):
     ocr_language: str = "eng"
     min_confidence: float = 0.5
     max_pages: Optional[int] = None  # Limit processing for testing
+    
+    # Boundary detection options
     force_visual_detection: bool = False  # Force visual boundary detection
+    force_llm_validation: bool = False  # Force LLM validation of boundaries
+    force_visual_only: bool = False  # Use only visual detection (no LLM)
+    max_detection_level: Optional[str] = None  # Override default detection level
     
     model_config = ConfigDict(from_attributes=True)

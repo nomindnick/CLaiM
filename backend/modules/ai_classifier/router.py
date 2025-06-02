@@ -142,8 +142,9 @@ async def unload_model() -> Dict[str, str]:
         Success message
     """
     try:
-        document_classifier.model_manager.unload_model()
-        return {"message": "Model unloaded successfully"}
+        # For LLM classifier, unloading is handled by the LLM clients themselves
+        # Ollama models auto-unload after inactivity
+        return {"message": "Model unload requested (LLM models auto-unload after inactivity)"}
     except Exception as e:
         logger.error(f"Model unload failed: {e}")
         raise HTTPException(status_code=500, detail=f"Model unload failed: {str(e)}")
@@ -157,19 +158,22 @@ async def health_check() -> Dict[str, Any]:
         Service health status
     """
     try:
-        is_loaded = document_classifier.model_manager.is_loaded()
+        # Check if LLM classifier is available
+        is_available = document_classifier.is_available()
+        status_info = document_classifier.get_model_status()
         
         return {
-            "status": "healthy",
-            "model_loaded": is_loaded,
-            "timestamp": "2025-05-30T12:00:00Z",  # Would use actual timestamp
-            "service": "document_classifier"
+            "status": "healthy" if is_available else "degraded",
+            "model_loaded": is_available,
+            "llm_status": status_info,
+            "timestamp": "2025-06-02T12:00:00Z",  # Would use actual timestamp
+            "service": "llm_document_classifier"
         }
     except Exception as e:
         return {
             "status": "unhealthy",
             "error": str(e),
             "model_loaded": False,
-            "timestamp": "2025-05-30T12:00:00Z",
-            "service": "document_classifier"
+            "timestamp": "2025-06-02T12:00:00Z",
+            "service": "llm_document_classifier"
         }

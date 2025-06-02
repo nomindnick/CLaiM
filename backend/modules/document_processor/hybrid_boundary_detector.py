@@ -16,13 +16,16 @@ from .boundary_detector import BoundaryDetector
 from .visual_boundary_detector import VisualBoundaryDetector, BoundaryScore, PageFeatures
 from .ocr_handler import OCRHandler
 from .layoutlm_boundary_detector import LayoutLMBoundaryDetector
+from .llm_boundary_detector import LLMBoundaryDetector, BoundaryCandidate
+from ..llm_client.router import PrivacyMode
 
 
 class DetectionLevel(Enum):
     """Detection levels for progressive analysis."""
     HEURISTIC = 1  # Fast pattern matching
     VISUAL = 2     # Visual similarity analysis
-    DEEP = 3       # LayoutLM integration
+    LLM = 3        # LLM-enhanced validation
+    DEEP = 4       # LayoutLM integration
 
 
 @dataclass
@@ -42,7 +45,8 @@ class HybridBoundaryDetector:
                  ocr_handler: Optional[OCRHandler] = None,
                  visual_model: str = "clip-ViT-B-32",
                  cache_dir: str = ".boundary_cache",
-                 device: str = None):
+                 device: str = None,
+                 privacy_mode: PrivacyMode = PrivacyMode.HYBRID_SAFE):
         """Initialize hybrid detector.
         
         Args:
@@ -50,12 +54,15 @@ class HybridBoundaryDetector:
             visual_model: Visual embedding model name
             cache_dir: Directory for caching embeddings
             device: Device for model inference
+            privacy_mode: Privacy mode for LLM operations
         """
         self.ocr_handler = ocr_handler
+        self.privacy_mode = privacy_mode
         
         # Initialize detectors
         self.pattern_detector = BoundaryDetector(ocr_handler)
         self.visual_detector = None  # Lazy load
+        self.llm_detector = None  # Lazy load for LLM analysis
         self.layoutlm_detector = None  # Lazy load for deep analysis
         
         # Configuration
@@ -66,12 +73,15 @@ class HybridBoundaryDetector:
         # Thresholds
         self.pattern_confidence_threshold = 0.7
         self.visual_confidence_threshold = 0.6
+        self.llm_confidence_threshold = 0.7
         self.min_visual_pages = 10  # Don't use visual for very small PDFs
+        self.min_llm_pages = 5  # Use LLM for smaller documents too
     
     def detect_boundaries(self,
                          pdf_doc: fitz.Document,
-                         max_level: DetectionLevel = DetectionLevel.VISUAL,
+                         max_level: DetectionLevel = DetectionLevel.LLM,
                          force_visual: bool = False,
+                         force_llm: bool = False,
                          progress_callback=None) -> HybridBoundaryResult:
         """Detect document boundaries using progressive approach.
         
@@ -79,6 +89,7 @@ class HybridBoundaryDetector:
             pdf_doc: PyMuPDF document
             max_level: Maximum detection level to use
             force_visual: Force visual detection regardless of pattern results
+            force_llm: Force LLM validation regardless of other results
             
         Returns:
             Hybrid boundary detection result
@@ -99,43 +110,60 @@ class HybridBoundaryDetector:
             )
         )
         
+        current_result = pattern_result
+        current_level = DetectionLevel.HEURISTIC
+        
         if needs_visual and max_level.value >= DetectionLevel.VISUAL.value:
             logger.info("Running visual boundary detection for improved accuracy")
             visual_result = self._run_visual_detection(pdf_doc)
-            
-            # Check if we need deep analysis
-            needs_deep = (
-                max_level.value >= DetectionLevel.DEEP.value and (
-                    self._has_very_low_confidence(visual_result) or
-                    self._has_ambiguous_boundaries(visual_result)
+            current_result = self._merge_detection_results(pattern_result, visual_result, pdf_doc)
+            current_level = DetectionLevel.VISUAL
+        
+        # Check if we need LLM validation
+        needs_llm = (
+            force_llm or
+            max_level.value >= DetectionLevel.LLM.value and (
+                pdf_doc.page_count >= self.min_llm_pages and (
+                    self._has_low_confidence_boundaries(current_result) or
+                    self._has_suspiciously_many_documents(current_result, pdf_doc.page_count) or
+                    current_level == DetectionLevel.HEURISTIC  # Always validate pattern-only results
                 )
             )
-            
-            if needs_deep:
-                logger.info("Running deep LayoutLM analysis for complex document")
-                deep_result = self._run_deep_detection(pdf_doc, visual_result)
-                final_result = deep_result
-                final_result.detection_level = DetectionLevel.DEEP
-            else:
-                # Merge pattern and visual results
-                final_result = self._merge_detection_results(
-                    pattern_result, visual_result, pdf_doc
-                )
-                final_result.detection_level = DetectionLevel.VISUAL
-        else:
-            final_result = pattern_result
-            final_result.detection_level = DetectionLevel.HEURISTIC
-        
-        # Record processing time
-        final_result.processing_time = time.time() - start_time
-        
-        logger.info(
-            f"Hybrid detection completed in {final_result.processing_time:.2f}s "
-            f"using {final_result.detection_level.name.lower()} level, "
-            f"found {len(final_result.boundaries)} documents"
         )
         
-        return final_result
+        if needs_llm:
+            logger.info("Running LLM boundary validation for enhanced accuracy")
+            llm_result = self._run_llm_validation(pdf_doc, current_result)
+            current_result = llm_result
+            current_level = DetectionLevel.LLM
+        
+        # Check if we need deep LayoutLM analysis
+        needs_deep = (
+            max_level.value >= DetectionLevel.DEEP.value and (
+                self._has_very_low_confidence(current_result) or
+                self._has_ambiguous_boundaries(current_result)
+            )
+        )
+        
+        if needs_deep:
+            logger.info("Running deep LayoutLM analysis for complex document")
+            deep_result = self._run_deep_detection(pdf_doc, current_result)
+            current_result = deep_result
+            current_level = DetectionLevel.DEEP
+        
+        # Set final detection level
+        current_result.detection_level = current_level
+        
+        # Record processing time
+        current_result.processing_time = time.time() - start_time
+        
+        logger.info(
+            f"Hybrid detection completed in {current_result.processing_time:.2f}s "
+            f"using {current_result.detection_level.name.lower()} level, "
+            f"found {len(current_result.boundaries)} documents"
+        )
+        
+        return current_result
     
     def _run_pattern_detection(self, pdf_doc: fitz.Document) -> HybridBoundaryResult:
         """Run pattern-based boundary detection."""
@@ -188,6 +216,92 @@ class HybridBoundaryDetector:
             confidence_scores=confidence_scores,
             processing_time=0.0,
             visual_scores=visual_scores
+        )
+    
+    def _run_llm_validation(self, 
+                           pdf_doc: fitz.Document,
+                           current_result: HybridBoundaryResult) -> HybridBoundaryResult:
+        """Run LLM validation of boundary candidates.
+        
+        Args:
+            pdf_doc: PyMuPDF document
+            current_result: Current boundary detection result to validate
+            
+        Returns:
+            LLM-validated boundary result
+        """
+        # Lazy load LLM detector
+        if self.llm_detector is None:
+            self.llm_detector = LLMBoundaryDetector(
+                default_privacy_mode=self.privacy_mode
+            )
+        
+        # Extract full text from PDF
+        full_text = ""
+        for page_num in range(pdf_doc.page_count):
+            page_text = pdf_doc[page_num].get_text()
+            full_text += f"\n--- Page {page_num + 1} ---\n" + page_text
+        
+        # Convert boundaries to boundary candidates
+        boundary_candidates = []
+        for start_page, end_page in current_result.boundaries:
+            # Calculate approximate character position for the boundary
+            # This is a rough estimate - in practice we'd need more precise positioning
+            char_position = len(full_text) * (start_page / pdf_doc.page_count)
+            
+            confidence = current_result.confidence_scores.get(start_page, 0.5)
+            method = current_result.detection_level.name.lower()
+            
+            candidate = BoundaryCandidate(
+                page_number=start_page,
+                position=int(char_position),
+                confidence=confidence,
+                method=method
+            )
+            boundary_candidates.append(candidate)
+        
+        # Run LLM validation
+        validated_candidates = self.llm_detector.validate_boundaries(
+            full_text=full_text,
+            boundary_candidates=boundary_candidates,
+            privacy_mode=self.privacy_mode
+        )
+        
+        # Convert validated candidates back to boundaries
+        validated_boundaries = []
+        updated_confidence_scores = {}
+        
+        for candidate in validated_candidates:
+            # Convert back to page-based boundaries
+            start_page = candidate.page_number
+            
+            # Find end page (next boundary or end of document)
+            end_page = pdf_doc.page_count - 1
+            for other_candidate in validated_candidates:
+                if other_candidate.page_number > start_page:
+                    end_page = other_candidate.page_number - 1
+                    break
+            
+            if start_page <= end_page:
+                validated_boundaries.append((start_page, end_page))
+                
+                # Update confidence scores for all pages in this document
+                for page_num in range(start_page, end_page + 1):
+                    updated_confidence_scores[page_num] = candidate.confidence
+        
+        # Sort boundaries
+        validated_boundaries = sorted(validated_boundaries)
+        
+        logger.info(
+            f"LLM validation: {len(current_result.boundaries)} → {len(validated_boundaries)} boundaries"
+        )
+        
+        return HybridBoundaryResult(
+            boundaries=validated_boundaries,
+            detection_level=DetectionLevel.LLM,
+            confidence_scores=updated_confidence_scores,
+            processing_time=0.0,
+            visual_scores=current_result.visual_scores
         )
     
     def _merge_detection_results(self,

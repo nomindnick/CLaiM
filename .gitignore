@@ -121,10 +121,20 @@ storage/database/
 .boundary_cache/
 .test_boundary_cache/
 
+# OCR cache directories - generated content
+.ocr_cache/
+.ocr_cache_*/
+backend/.ocr_cache/
+
 # OCR debug output and testing
 ocr_debug_output/
 preprocessing_debug/
 ocr_test_results.json
+
+# LLM integration test scripts (temporary)
+scripts/test_llm_*.py
+scripts/debug_*.py
+scripts/test_*_caching.py
 
 # Documentation build
 docs/_build/

@@ -101,11 +101,24 @@ class PDFSplitter:
                     progress_callback(1, result.total_pages, "Detecting document boundaries")
                 
                 if self.use_visual_detection:
-                    # Use hybrid detection with visual analysis
+                    # Use hybrid detection with LLM validation for enhanced accuracy
+                    max_level = DetectionLevel.LLM  # Default to LLM-enhanced detection
+                    
+                    # Check if specific detection level is requested
+                    if hasattr(request, 'max_detection_level') and request.max_detection_level:
+                        # Convert string to enum if needed
+                        if isinstance(request.max_detection_level, str):
+                            max_level = getattr(DetectionLevel, request.max_detection_level.upper(), DetectionLevel.LLM)
+                        else:
+                            max_level = request.max_detection_level
+                    elif hasattr(request, 'force_visual_only') and request.force_visual_only:
+                        max_level = DetectionLevel.VISUAL
+                    
                     detection_result = self.hybrid_detector.detect_boundaries(
                         pdf_doc,
-                        max_level=DetectionLevel.VISUAL,
-                        force_visual=request.force_visual_detection if hasattr(request, 'force_visual_detection') else False
+                        max_level=max_level,
+                        force_visual=request.force_visual_detection if hasattr(request, 'force_visual_detection') else False,
+                        force_llm=request.force_llm_validation if hasattr(request, 'force_llm_validation') else False
                     )
                     boundaries = detection_result.boundaries
                     
