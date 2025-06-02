@@ -236,25 +236,27 @@ class HybridBoundaryDetector:
                 default_privacy_mode=self.privacy_mode
             )
         
-        # Extract full text from PDF
+        # Extract full text from PDF and track page positions
         full_text = ""
+        page_positions = {}  # page_num -> char_position
+        
         for page_num in range(pdf_doc.page_count):
+            page_positions[page_num + 1] = len(full_text)  # Store position of page start
             page_text = pdf_doc[page_num].get_text()
             full_text += f"\n--- Page {page_num + 1} ---\n" + page_text
         
         # Convert boundaries to boundary candidates
         boundary_candidates = []
         for start_page, end_page in current_result.boundaries:
-            # Calculate approximate character position for the boundary
-            # This is a rough estimate - in practice we'd need more precise positioning
-            char_position = len(full_text) * (start_page / pdf_doc.page_count)
+            # Get actual character position for the page boundary
+            char_position = page_positions.get(start_page, 0)
             
             confidence = current_result.confidence_scores.get(start_page, 0.5)
             method = current_result.detection_level.name.lower()
             
             candidate = BoundaryCandidate(
                 page_number=start_page,
-                position=int(char_position),
+                position=char_position,
                 confidence=confidence,
                 method=method
             )

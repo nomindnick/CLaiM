@@ -388,6 +388,15 @@ class LLMBoundaryDetector:
         next_end = min(len(words), boundary_word_index + self.window_size // 2)
         next_words = words[boundary_word_index:next_end]
         
+        # Handle edge cases where we don't have enough context
+        if not current_words and boundary_word_index == 0:
+            # At start of document - use beginning as "current" for context
+            current_words = words[:min(50, len(words))]  # First 50 words as context
+        
+        if not next_words:
+            # At end of document - use ending as "next" for context  
+            next_words = words[max(0, len(words) - 50):]  # Last 50 words as context
+        
         current_window = " ".join(current_words)
         next_window = " ".join(next_words)
         
