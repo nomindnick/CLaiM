@@ -284,12 +284,14 @@ class LLMRouter:
         # Create classification prompt
         prompt = PromptTemplates.format_classification_prompt(text, categories, context)
         
-        # Create request
+        # Create request with longer timeout for large documents
+        timeout = 90 if len(text) > 5000 else 60  # 90s for large docs, 60s for normal
         request = LLMRequest(
             prompt=prompt,
             task_type=LLMTaskType.CLASSIFICATION,
             temperature=0.1,
-            max_tokens=200
+            max_tokens=200,
+            timeout=timeout
         )
         
         # Route and process
@@ -322,12 +324,14 @@ class LLMRouter:
         # Create boundary detection prompt
         prompt = PromptTemplates.format_boundary_prompt(current_segment, next_segment)
         
-        # Create request
+        # Create request with timeout based on segment size
+        timeout = 75 if len(combined_text) > 3000 else 60
         request = LLMRequest(
             prompt=prompt,
             task_type=LLMTaskType.BOUNDARY_DETECTION,
             temperature=0.1,
-            max_tokens=100
+            max_tokens=100,
+            timeout=timeout
         )
         
         # Route and process

@@ -42,7 +42,7 @@ class LLMClient(ABC):
     
     def __init__(self, model_name: str, **kwargs):
         self.model_name = model_name
-        self.default_timeout = kwargs.get('timeout', 30)
+        self.default_timeout = kwargs.get('timeout', 60)  # Increased from 30s to 60s
         self.default_temperature = kwargs.get('temperature', 0.1)
         self.default_max_tokens = kwargs.get('max_tokens', 4000)
     
