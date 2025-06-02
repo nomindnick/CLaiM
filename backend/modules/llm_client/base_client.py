@@ -79,7 +79,30 @@ class LLMClient(ABC):
     def process_sync(self, request: LLMRequest) -> LLMResponse:
         """Synchronous wrapper for process method."""
         import asyncio
-        return asyncio.run(self.process(request))
+        
+        try:
+            # Try to get the current event loop
+            loop = asyncio.get_running_loop()
+            # If we're already in an event loop, we need to use a different approach
+            import concurrent.futures
+            import threading
+            
+            # Create a new event loop in a separate thread
+            def run_in_thread():
+                new_loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(new_loop)
+                try:
+                    return new_loop.run_until_complete(self.process(request))
+                finally:
+                    new_loop.close()
+            
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(run_in_thread)
+                return future.result(timeout=request.timeout)
+                
+        except RuntimeError:
+            # No event loop running, safe to use asyncio.run()
+            return asyncio.run(self.process(request))
     
     def classify_document(self, 
                          text: str, 
