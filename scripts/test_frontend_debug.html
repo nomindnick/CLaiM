@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Frontend Debug Test</title>
+</head>
+<body>
+    <h1>Frontend Debug Test</h1>
+    <div id="api-test"></div>
+    <div id="console-errors"></div>
+    
+    <script>
+        // Test API connectivity
+        fetch('http://localhost:8000/api/v1/documents/list?limit=20&offset=0')
+            .then(response => response.json())
+            .then(data => {
+                document.getElementById('api-test').innerHTML = `
+                    <h2>API Test Result:</h2>
+                    <p>Total documents: ${data.total}</p>
+                    <p>Documents returned: ${data.documents.length}</p>
+                    <pre>${JSON.stringify(data.documents[0], null, 2)}</pre>
+                `;
+            })
+            .catch(error => {
+                document.getElementById('api-test').innerHTML = `
+                    <h2>API Test Failed:</h2>
+                    <p style="color: red;">${error.message}</p>
+                `;
+            });
+            
+        // Check for console errors
+        window.addEventListener('error', function(e) {
+            document.getElementById('console-errors').innerHTML += `
+                <p style="color: red;">Error: ${e.message} at ${e.filename}:${e.lineno}</p>
+            `;
+        });
+    </script>
+</body>
+</html>

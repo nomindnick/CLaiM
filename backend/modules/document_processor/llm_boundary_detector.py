@@ -1,593 +1,548 @@
-"""LLM-enhanced boundary detection for construction litigation documents.
+"""LLM-based document boundary detection.
 
-This module provides LLM-based validation and refinement of document boundaries
-detected through traditional methods, dramatically improving accuracy on real-world
-construction documents.
+This module implements a semantic, context-aware approach to document boundary
+detection using LLMs instead of pattern matching.
 """
 
-import time
-import hashlib
-from typing import List, Dict, Any, Optional, Tuple
-from loguru import logger
+import json
+from typing import List, Dict, Tuple, Optional, Any
 from dataclasses import dataclass
+from collections import defaultdict, Counter
+from enum import Enum
 
-from ..llm_client.router import LLMRouter, PrivacyMode
-from ..llm_client.base_client import LLMError, LLMServiceUnavailable
-from ..llm_client.prompt_templates import PromptTemplates
+import fitz
+from loguru import logger
+
+from ..llm_client.base_client import BaseLLMClient
+from ..llm_client.ollama_client import OllamaClient
+from .improved_ocr_handler import ImprovedOCRHandler
+from .models import DocumentType
+
+
+class ConfidenceLevel(Enum):
+    """Confidence levels for boundary detection."""
+    HIGH = "high"  # > 0.8
+    MEDIUM = "medium"  # 0.6 - 0.8  
+    LOW = "low"  # < 0.6
 
 
 @dataclass
-class BoundaryCandidate:
-    """Represents a potential document boundary."""
-    page_number: int
-    position: int  # Character position in full text
-    confidence: float
-    method: str  # 'pattern', 'visual', 'llm'
-    reasoning: Optional[str] = None
-
-
-@dataclass
-class BoundaryValidationResult:
-    """Result of LLM boundary validation."""
+class BoundaryAnalysis:
+    """Result of boundary analysis for a page."""
+    page_num: int
     is_boundary: bool
     confidence: float
+    document_type: Optional[str]
     reasoning: str
-    processing_time: float
+    continues_from_previous: bool
+    
+    @property
+    def confidence_level(self) -> ConfidenceLevel:
+        if self.confidence > 0.8:
+            return ConfidenceLevel.HIGH
+        elif self.confidence > 0.6:
+            return ConfidenceLevel.MEDIUM
+        return ConfidenceLevel.LOW
+
+
+@dataclass
+class WindowAnalysis:
+    """Analysis results for a window of pages."""
+    window_start: int
+    window_end: int
+    boundaries: List[BoundaryAnalysis]
+    window_summary: str
+    avg_confidence: float
 
 
 class LLMBoundaryDetector:
-    """LLM-enhanced boundary detection for document processing."""
+    """Document boundary detection using LLM for semantic understanding."""
     
-    def __init__(self,
-                 ollama_host: str = "http://localhost:11434",
-                 ollama_model: str = "llama3:8b-instruct-q5_K_M",
-                 openai_model: str = "gpt-4o-mini",
-                 openai_api_key: Optional[str] = None,
-                 default_privacy_mode: PrivacyMode = PrivacyMode.HYBRID_SAFE):
+    def __init__(
+        self, 
+        llm_client: Optional[BaseLLMClient] = None,
+        ocr_handler: Optional[ImprovedOCRHandler] = None,
+        window_size: int = 3,
+        overlap: int = 1,
+        confidence_threshold: float = 0.7
+    ):
         """Initialize LLM boundary detector.
         
         Args:
-            ollama_host: Ollama service host
-            ollama_model: Ollama model name
-            openai_model: OpenAI model name
-            openai_api_key: OpenAI API key
-            default_privacy_mode: Default privacy mode
+            llm_client: LLM client for analysis
+            ocr_handler: OCR handler for scanned pages
+            window_size: Number of pages to analyze together
+            overlap: Number of pages to overlap between windows
+            confidence_threshold: Minimum confidence for boundary detection
         """
-        self.router = LLMRouter(
-            ollama_host=ollama_host,
-            ollama_model=ollama_model,
-            openai_model=openai_model,
-            openai_api_key=openai_api_key
-        )
-        self.default_privacy_mode = default_privacy_mode
+        self.llm_client = llm_client or OllamaClient()
+        self.ocr_handler = ocr_handler or ImprovedOCRHandler()
+        self.window_size = window_size
+        self.overlap = overlap
+        self.confidence_threshold = confidence_threshold
         
-        # Text windowing parameters
-        self.window_size = 300  # Words before/after boundary candidate
-        self.overlap_size = 50   # Words of overlap between windows
-        self.min_segment_length = 100  # Minimum words in a document segment
+        # Cache for OCR results
+        self._ocr_cache = {}
         
-        # Confidence thresholds
-        self.high_confidence_threshold = 0.8
-        self.low_confidence_threshold = 0.3
-        
-        # Simple in-memory cache for boundary validation results
-        self._boundary_cache = {}
-        self._cache_max_size = 1000  # Maximum number of cached results
-    
-    def validate_boundaries(self, 
-                          full_text: str,
-                          boundary_candidates: List[BoundaryCandidate],
-                          privacy_mode: Optional[PrivacyMode] = None) -> List[BoundaryCandidate]:
-        """Validate boundary candidates using LLM analysis.
+    def detect_boundaries(self, pdf_doc: fitz.Document) -> List[Tuple[int, int]]:
+        """Detect document boundaries in a PDF using LLM analysis.
         
         Args:
-            full_text: Complete document text
-            boundary_candidates: List of potential boundaries to validate
-            privacy_mode: Privacy mode for LLM processing
+            pdf_doc: PyMuPDF document object
             
         Returns:
-            List of validated boundary candidates with updated confidence scores
+            List of (start_page, end_page) tuples for each document
         """
-        if not boundary_candidates:
-            return []
+        logger.info(f"Starting LLM boundary detection for {pdf_doc.page_count} pages")
         
-        privacy_mode = privacy_mode or self._determine_privacy_mode(full_text)
-        validated_boundaries = []
+        # Step 1: Extract page windows with overlap
+        windows = self._extract_page_windows(pdf_doc)
+        logger.info(f"Created {len(windows)} analysis windows")
         
-        logger.info(f"Validating {len(boundary_candidates)} boundary candidates with LLM")
+        # Step 2: Analyze each window with LLM
+        window_analyses = []
+        previous_summary = None
         
-        for i, candidate in enumerate(boundary_candidates):
-            try:
-                logger.debug(f"Validating boundary {i+1}/{len(boundary_candidates)} at position {candidate.position}")
-                
-                # Extract text windows around the boundary
-                current_window, next_window = self._extract_boundary_windows(
-                    full_text, candidate.position
-                )
-                
-                if not current_window or not next_window:
-                    logger.warning(f"Could not extract windows for boundary at position {candidate.position}")
-                    validated_boundaries.append(candidate)
-                    continue
-                
-                # Get LLM validation
-                validation_result = self._validate_single_boundary(
-                    current_window, next_window, privacy_mode
-                )
-                
-                # Update candidate with LLM results
-                updated_candidate = self._merge_boundary_confidence(
-                    candidate, validation_result
-                )
-                
-                validated_boundaries.append(updated_candidate)
-                
-            except Exception as e:
-                logger.warning(f"Failed to validate boundary {i+1}: {e}")
-                # Keep original candidate if validation fails
-                validated_boundaries.append(candidate)
-        
-        # Sort by confidence and filter low-confidence boundaries
-        validated_boundaries = sorted(
-            validated_boundaries, 
-            key=lambda x: x.confidence, 
-            reverse=True
-        )
-        
-        # Filter out very low confidence boundaries
-        filtered_boundaries = [
-            b for b in validated_boundaries 
-            if b.confidence >= self.low_confidence_threshold
-        ]
-        
-        logger.info(f"LLM validation complete: {len(filtered_boundaries)}/{len(boundary_candidates)} boundaries retained")
-        return filtered_boundaries
-    
-    def detect_boundaries_from_text(self,
-                                   full_text: str,
-                                   privacy_mode: Optional[PrivacyMode] = None) -> List[BoundaryCandidate]:
-        """Detect boundaries directly from text using LLM analysis.
-        
-        Args:
-            full_text: Complete document text
-            privacy_mode: Privacy mode for processing
+        for i, window in enumerate(windows):
+            logger.info(f"Analyzing window {i+1}/{len(windows)}")
+            analysis = self._analyze_window(window, previous_summary)
+            window_analyses.append(analysis)
+            previous_summary = analysis.window_summary
             
-        Returns:
-            List of detected boundaries
-        """
-        privacy_mode = privacy_mode or self._determine_privacy_mode(full_text)
+        # Step 3: Consolidate boundaries from overlapping analyses
+        boundaries = self._consolidate_boundaries(window_analyses, pdf_doc.page_count)
         
-        logger.info("Detecting boundaries using LLM analysis")
+        # Step 4: Validate and refine boundaries
+        boundaries = self._validate_boundaries(boundaries, pdf_doc)
         
-        words = full_text.split()
-        total_words = len(words)
-        
-        # For short documents, use pattern-based candidate detection
-        if total_words < self.window_size:
-            logger.info(f"Short document ({total_words} words), using pattern-based approach")
-            return self._detect_boundaries_short_document(full_text, privacy_mode)
-        else:
-            logger.info(f"Long document ({total_words} words), using sliding window approach")
-            return self._detect_boundaries_sliding_window(full_text, privacy_mode)
-    
-    def _detect_boundaries_short_document(self,
-                                        full_text: str,
-                                        privacy_mode: PrivacyMode) -> List[BoundaryCandidate]:
-        """Detect boundaries in short documents using pattern-based candidate detection."""
-        # Look for clear document boundary markers
-        boundary_patterns = [
-            r'\n---+\n',  # Horizontal line separators
-            r'\n={3,}\n',  # Equal sign separators
-            r'(?i)\n\s*REQUEST FOR INFORMATION',  # RFI headers
-            r'(?i)\n\s*INVOICE',  # Invoice headers  
-            r'(?i)\n\s*CHANGE ORDER',  # Change order headers
-            r'(?i)\n\s*FROM:\s*\S+@\S+',  # Email headers
-            r'(?i)\n\s*DAILY REPORT',  # Daily report headers
-            r'(?i)\n\s*MEETING MINUTES',  # Meeting minutes headers
-        ]
-        
-        import re
-        boundaries = []
-        
-        for pattern in boundary_patterns:
-            matches = list(re.finditer(pattern, full_text))
-            for match in matches:
-                # Get context around the potential boundary
-                match_pos = match.start()
-                
-                # Extract before and after segments
-                before_start = max(0, match_pos - 300)  # 300 chars before
-                after_end = min(len(full_text), match_pos + 300)  # 300 chars after
-                
-                before_text = full_text[before_start:match_pos]
-                after_text = full_text[match_pos:after_end]
-                
-                # Validate with LLM
-                try:
-                    validation_result = self._validate_single_boundary(
-                        before_text, after_text, privacy_mode
-                    )
-                    
-                    if validation_result.is_boundary and validation_result.confidence > self.low_confidence_threshold:
-                        boundary = BoundaryCandidate(
-                            page_number=self._estimate_page_number(match_pos, full_text),
-                            position=match_pos,
-                            confidence=validation_result.confidence,
-                            method='llm_pattern',
-                            reasoning=f"Pattern: {pattern[:20]}... - {validation_result.reasoning}"
-                        )
-                        boundaries.append(boundary)
-                        
-                except Exception as e:
-                    logger.warning(f"Failed to validate pattern boundary: {e}")
-                    continue
-        
-        # Remove duplicate boundaries (too close together)
-        boundaries = self._remove_duplicate_boundaries(boundaries)
-        
-        logger.info(f"Pattern-based detection found {len(boundaries)} boundaries")
+        logger.info(f"Detected {len(boundaries)} documents with LLM analysis")
         return boundaries
     
-    def _detect_boundaries_sliding_window(self,
-                                        full_text: str,
-                                        privacy_mode: PrivacyMode) -> List[BoundaryCandidate]:
-        """Detect boundaries in long documents using sliding window approach."""
-        # Split text into overlapping windows
-        windows = self._create_sliding_windows(full_text)
-        boundaries = []
-        
-        for i, (window_start, window_text) in enumerate(windows[:-1]):
-            try:
-                # Get text segments for boundary detection
-                current_end = self._get_window_end(window_text)
-                next_start = self._get_window_start(windows[i+1][1])
-                
-                # Validate potential boundary
-                validation_result = self._validate_single_boundary(
-                    current_end, next_start, privacy_mode
-                )
-                
-                if validation_result.is_boundary and validation_result.confidence > self.low_confidence_threshold:
-                    boundary = BoundaryCandidate(
-                        page_number=self._estimate_page_number(window_start, full_text),
-                        position=window_start + len(window_text),
-                        confidence=validation_result.confidence,
-                        method='llm_window',
-                        reasoning=validation_result.reasoning
-                    )
-                    boundaries.append(boundary)
-                    
-            except Exception as e:
-                logger.warning(f"Failed to analyze window {i+1}: {e}")
-                continue
-        
-        logger.info(f"Sliding window detection found {len(boundaries)} boundaries")
-        return boundaries
-    
-    def _remove_duplicate_boundaries(self, boundaries: List[BoundaryCandidate]) -> List[BoundaryCandidate]:
-        """Remove boundaries that are too close together."""
-        if not boundaries:
-            return boundaries
-        
-        # Sort by position
-        sorted_boundaries = sorted(boundaries, key=lambda b: b.position)
-        
-        # Remove duplicates within 100 characters of each other
-        filtered = [sorted_boundaries[0]]
-        for boundary in sorted_boundaries[1:]:
-            if boundary.position - filtered[-1].position > 100:
-                filtered.append(boundary)
-            elif boundary.confidence > filtered[-1].confidence:
-                # Replace with higher confidence boundary
-                filtered[-1] = boundary
-        
-        return filtered
-    
-    def _validate_single_boundary(self,
-                                 current_segment: str,
-                                 next_segment: str,
-                                 privacy_mode: PrivacyMode) -> BoundaryValidationResult:
-        """Validate a single boundary using LLM with caching.
+    def _extract_page_windows(self, pdf_doc: fitz.Document) -> List[List[Dict]]:
+        """Extract overlapping windows of pages for analysis.
         
         Args:
-            current_segment: Text ending current document
-            next_segment: Text starting next potential document
-            privacy_mode: Privacy mode for processing
+            pdf_doc: PDF document
             
         Returns:
-            Boundary validation result
+            List of page windows, each containing page info
         """
-        start_time = time.time()
-        
-        # Create cache key from text segments
-        cache_key = self._create_cache_key(current_segment, next_segment, privacy_mode)
-        
-        # Check cache first
-        if cache_key in self._boundary_cache:
-            cached_result = self._boundary_cache[cache_key]
-            logger.debug("Using cached boundary validation result")
-            # Return cached result with updated processing time
-            return BoundaryValidationResult(
-                is_boundary=cached_result["is_boundary"],
-                confidence=cached_result["confidence"],
-                reasoning=f"[CACHED] {cached_result['reasoning']}",
-                processing_time=time.time() - start_time  # Very fast for cached results
-            )
-        
-        try:
-            # Use router's boundary detection method
-            response = self.router.detect_boundary(
-                current_segment=current_segment,
-                next_segment=next_segment,
-                privacy_mode=privacy_mode
-            )
-            
-            # Parse LLM response
-            parsed = PromptTemplates.parse_boundary_response(response.content)
-            
-            if not parsed:
-                raise LLMError("Failed to parse LLM boundary response")
-            
-            processing_time = time.time() - start_time
-            
-            result = BoundaryValidationResult(
-                is_boundary=parsed["is_boundary"],
-                confidence=parsed["confidence"],
-                reasoning=parsed["reasoning"],
-                processing_time=processing_time
-            )
-            
-            # Cache the result
-            self._cache_boundary_result(cache_key, parsed)
-            
-            return result
-            
-        except (LLMError, LLMServiceUnavailable) as e:
-            logger.error(f"LLM boundary validation failed: {e}")
-            # Return conservative result
-            return BoundaryValidationResult(
-                is_boundary=False,
-                confidence=0.0,
-                reasoning=f"LLM validation failed: {str(e)}",
-                processing_time=time.time() - start_time
-            )
-    
-    def _extract_boundary_windows(self, 
-                                 full_text: str, 
-                                 boundary_position: int) -> Tuple[str, str]:
-        """Extract text windows around a boundary position.
-        
-        Args:
-            full_text: Complete document text
-            boundary_position: Character position of potential boundary
-            
-        Returns:
-            Tuple of (current_window, next_window)
-        """
-        # Convert to word-based positions for more accurate windowing
-        words = full_text.split()
-        chars_so_far = 0
-        boundary_word_index = 0
-        
-        # Find word index corresponding to character position
-        for i, word in enumerate(words):
-            if chars_so_far >= boundary_position:
-                boundary_word_index = i
-                break
-            chars_so_far += len(word) + 1  # +1 for space
-        
-        # Extract windows around boundary
-        start_index = max(0, boundary_word_index - self.window_size)
-        end_index = min(len(words), boundary_word_index + self.window_size)
-        
-        # Current segment: words before boundary
-        current_start = max(0, boundary_word_index - self.window_size // 2)
-        current_words = words[current_start:boundary_word_index]
-        
-        # Next segment: words after boundary
-        next_end = min(len(words), boundary_word_index + self.window_size // 2)
-        next_words = words[boundary_word_index:next_end]
-        
-        # Handle edge cases where we don't have enough context
-        if not current_words and boundary_word_index == 0:
-            # At start of document - use beginning as "current" for context
-            current_words = words[:min(50, len(words))]  # First 50 words as context
-        
-        if not next_words:
-            # At end of document - use ending as "next" for context  
-            next_words = words[max(0, len(words) - 50):]  # Last 50 words as context
-        
-        current_window = " ".join(current_words)
-        next_window = " ".join(next_words)
-        
-        return current_window, next_window
-    
-    def _create_sliding_windows(self, text: str) -> List[Tuple[int, str]]:
-        """Create overlapping text windows for boundary detection.
-        
-        Args:
-            text: Full document text
-            
-        Returns:
-            List of (start_position, window_text) tuples
-        """
-        words = text.split()
         windows = []
         
-        window_step = self.window_size - self.overlap_size
+        # Calculate window positions with overlap
+        step = self.window_size - self.overlap
         
-        for i in range(0, len(words), window_step):
-            end_index = min(i + self.window_size, len(words))
-            window_words = words[i:end_index]
+        for start in range(0, pdf_doc.page_count, step):
+            window_pages = []
+            end = min(start + self.window_size, pdf_doc.page_count)
             
-            if len(window_words) < self.min_segment_length:
-                break
+            for page_num in range(start, end):
+                page = pdf_doc[page_num]
+                text = self._get_page_text(page, page_num)
                 
-            window_text = " ".join(window_words)
+                # Extract page features
+                page_info = {
+                    'page_num': page_num,
+                    'text': text,
+                    'text_length': len(text.strip()),
+                    'has_images': len(page.get_images()) > 0,
+                    'has_many_drawings': len(page.get_drawings()) > 50,
+                    'font_info': self._extract_font_info(page),
+                    'layout_info': self._extract_layout_info(page)
+                }
+                
+                window_pages.append(page_info)
+                
+            windows.append(window_pages)
             
-            # Calculate character position
-            char_position = len(" ".join(words[:i]))
-            if i > 0:
-                char_position += 1  # Add space
-                
-            windows.append((char_position, window_text))
-        
         return windows
     
-    def _get_window_end(self, window_text: str) -> str:
-        """Get the ending portion of a text window.
+    def _get_page_text(self, page: fitz.Page, page_num: int) -> str:
+        """Get text from page, using OCR if needed.
         
         Args:
-            window_text: Window text
+            page: PyMuPDF page object
+            page_num: Page number for caching
             
         Returns:
-            Last ~150 words of the window
+            Extracted text
         """
-        words = window_text.split()
-        if len(words) > 150:
-            return " ".join(words[-150:])
-        return window_text
+        # Check cache first
+        if page_num in self._ocr_cache:
+            return self._ocr_cache[page_num]
+            
+        text = page.get_text()
+        
+        # Use OCR for scanned pages
+        if len(text.strip()) < 10 and self.ocr_handler:
+            try:
+                ocr_text, confidence = self.ocr_handler.process_page(page, dpi=200)
+                if confidence > 0.3:
+                    text = ocr_text
+                    self._ocr_cache[page_num] = text
+            except Exception as e:
+                logger.warning(f"OCR failed for page {page_num + 1}: {e}")
+                
+        return text
     
-    def _get_window_start(self, window_text: str) -> str:
-        """Get the starting portion of a text window.
-        
-        Args:
-            window_text: Window text
-            
-        Returns:
-            First ~150 words of the window
-        """
-        words = window_text.split()
-        if len(words) > 150:
-            return " ".join(words[:150])
-        return window_text
+    def _extract_font_info(self, page: fitz.Page) -> Dict[str, Any]:
+        """Extract font information from page."""
+        try:
+            fonts = page.get_fonts()
+            return {
+                'num_fonts': len(fonts),
+                'has_multiple_fonts': len(fonts) > 2
+            }
+        except:
+            return {'num_fonts': 0, 'has_multiple_fonts': False}
     
-    def _merge_boundary_confidence(self,
-                                  original_candidate: BoundaryCandidate,
-                                  llm_result: BoundaryValidationResult) -> BoundaryCandidate:
-        """Merge original boundary detection with LLM validation.
+    def _extract_layout_info(self, page: fitz.Page) -> Dict[str, Any]:
+        """Extract layout information from page."""
+        try:
+            blocks = page.get_text("blocks")
+            return {
+                'num_blocks': len(blocks),
+                'is_dense': len(blocks) > 20,
+                'is_sparse': len(blocks) < 5
+            }
+        except:
+            return {'num_blocks': 0, 'is_dense': False, 'is_sparse': True}
+    
+    def _analyze_window(
+        self, 
+        window_pages: List[Dict], 
+        previous_summary: Optional[str] = None
+    ) -> WindowAnalysis:
+        """Analyze a window of pages for document boundaries.
         
         Args:
-            original_candidate: Original boundary candidate
-            llm_result: LLM validation result
+            window_pages: List of page information
+            previous_summary: Summary from previous window
             
         Returns:
-            Updated boundary candidate
+            Window analysis with boundary detections
         """
-        # Weighted average of original and LLM confidence
-        if llm_result.is_boundary:
-            # If LLM confirms boundary, weight LLM higher
-            combined_confidence = (0.3 * original_candidate.confidence + 
-                                 0.7 * llm_result.confidence)
-        else:
-            # If LLM rejects boundary, weight LLM much higher
-            combined_confidence = (0.1 * original_candidate.confidence + 
-                                 0.9 * (1.0 - llm_result.confidence))
+        # Build context for LLM
+        window_text = self._build_window_context(window_pages)
         
-        # Update reasoning
-        updated_reasoning = f"{original_candidate.method}: {original_candidate.confidence:.2f}, LLM: {llm_result.reasoning}"
+        # Create analysis prompt
+        prompt = self._build_analysis_prompt(window_text, previous_summary)
         
-        return BoundaryCandidate(
-            page_number=original_candidate.page_number,
-            position=original_candidate.position,
-            confidence=combined_confidence,
-            method=f"{original_candidate.method}+llm",
-            reasoning=updated_reasoning
+        # Get LLM analysis
+        try:
+            response = self.llm_client.complete(prompt)
+            analysis_data = self._parse_llm_response(response)
+            
+            # Convert to BoundaryAnalysis objects
+            boundaries = []
+            for boundary_data in analysis_data.get('boundaries', []):
+                boundaries.append(BoundaryAnalysis(
+                    page_num=boundary_data['page_num'],
+                    is_boundary=boundary_data['is_boundary'],
+                    confidence=boundary_data['confidence'],
+                    document_type=boundary_data.get('document_type'),
+                    reasoning=boundary_data.get('reasoning', ''),
+                    continues_from_previous=boundary_data.get('continues_from_previous', False)
+                ))
+                
+            # Calculate average confidence
+            avg_confidence = sum(b.confidence for b in boundaries) / len(boundaries) if boundaries else 0
+            
+            return WindowAnalysis(
+                window_start=window_pages[0]['page_num'],
+                window_end=window_pages[-1]['page_num'],
+                boundaries=boundaries,
+                window_summary=analysis_data.get('window_summary', ''),
+                avg_confidence=avg_confidence
+            )
+            
+        except Exception as e:
+            logger.error(f"LLM analysis failed: {e}")
+            # Fallback to simple analysis
+            return self._fallback_analysis(window_pages)
+    
+    def _build_window_context(self, window_pages: List[Dict]) -> str:
+        """Build context string for window analysis."""
+        context_parts = []
+        
+        for page in window_pages:
+            page_num = page['page_num'] + 1  # Human-readable
+            
+            # Truncate text for context
+            text_preview = page['text'][:1000] if len(page['text']) > 1000 else page['text']
+            text_preview = text_preview.replace('\n', ' ')
+            
+            page_context = f"""
+Page {page_num}:
+- Text length: {page['text_length']} characters
+- Has images: {page['has_images']}
+- Dense layout: {page['layout_info']['is_dense']}
+- Text preview: {text_preview}
+"""
+            context_parts.append(page_context)
+            
+        return "\n".join(context_parts)
+    
+    def _build_analysis_prompt(
+        self, 
+        window_text: str, 
+        previous_summary: Optional[str] = None
+    ) -> str:
+        """Build prompt for LLM boundary analysis."""
+        prompt = f"""You are analyzing pages from a construction litigation PDF to identify document boundaries.
+Your task is to determine where one document ends and another begins.
+
+IMPORTANT: Construction documents often span multiple pages:
+- Emails with attachments/quotes can be 2-4 pages
+- RFIs and submittals are typically multi-page
+- Invoices often have multiple pages of line items
+- Technical drawings come in sets
+- Payment applications have continuation sheets
+
+Window of pages to analyze:
+{window_text}
+
+{'Previous window summary: ' + previous_summary if previous_summary else 'This is the first window.'}
+
+For EACH page in this window, analyze if it starts a new document.
+
+Consider these indicators for NEW documents:
+1. Email headers (From:, To:, Subject:) that are NOT quoted/forwarded
+2. Document headers (RFI #, Invoice #, Submittal #)
+3. Major format changes (email to drawing, invoice to RFI)
+4. New letterhead or company info
+5. Date jumps indicating different time periods
+
+Consider these indicators for CONTINUED documents:
+1. "Page X of Y" patterns
+2. Continued item lists or tables
+3. Email quotes/forwards (>, >>, etc.)
+4. Consistent headers/footers
+5. References to "continued from previous page"
+6. Same invoice/RFI/submittal number
+
+Return a JSON object with this structure:
+{{
+    "boundaries": [
+        {{
+            "page_num": 0,  // 0-based page number
+            "is_boundary": true/false,  // Is this the start of a new document?
+            "confidence": 0.0-1.0,  // How confident are you?
+            "document_type": "email/rfi/invoice/submittal/drawing/etc",  // If new document
+            "reasoning": "Brief explanation",
+            "continues_from_previous": true/false  // Does this continue from previous window?
+        }}
+        // ... for each page
+    ],
+    "window_summary": "Brief summary of documents in this window"
+}}
+
+Be conservative - only mark clear document boundaries. When in doubt, assume continuation."""
+        
+        return prompt
+    
+    def _parse_llm_response(self, response: str) -> Dict[str, Any]:
+        """Parse LLM response to extract structured data."""
+        try:
+            # Try to extract JSON from response
+            # Handle case where LLM includes markdown formatting
+            if "```json" in response:
+                json_start = response.find("```json") + 7
+                json_end = response.find("```", json_start)
+                response = response[json_start:json_end]
+            elif "```" in response:
+                json_start = response.find("```") + 3
+                json_end = response.find("```", json_start)
+                response = response[json_start:json_end]
+                
+            return json.loads(response.strip())
+        except Exception as e:
+            logger.error(f"Failed to parse LLM response: {e}")
+            logger.debug(f"Response was: {response}")
+            # Return empty analysis
+            return {"boundaries": [], "window_summary": ""}
+    
+    def _fallback_analysis(self, window_pages: List[Dict]) -> WindowAnalysis:
+        """Simple fallback analysis when LLM fails."""
+        boundaries = []
+        
+        for page in window_pages:
+            # Simple heuristics
+            text = page['text'][:500].lower()
+            is_boundary = any([
+                'from:' in text and '@' in text,
+                'invoice' in text and '#' in text,
+                'rfi' in text and '#' in text,
+                'submittal' in text
+            ])
+            
+            boundaries.append(BoundaryAnalysis(
+                page_num=page['page_num'],
+                is_boundary=is_boundary,
+                confidence=0.5,  # Low confidence for fallback
+                document_type=None,
+                reasoning="Fallback detection",
+                continues_from_previous=False
+            ))
+            
+        return WindowAnalysis(
+            window_start=window_pages[0]['page_num'],
+            window_end=window_pages[-1]['page_num'],
+            boundaries=boundaries,
+            window_summary="Fallback analysis",
+            avg_confidence=0.5
         )
     
-    def _estimate_page_number(self, char_position: int, full_text: str) -> int:
-        """Estimate page number from character position.
+    def _consolidate_boundaries(
+        self, 
+        window_analyses: List[WindowAnalysis],
+        total_pages: int
+    ) -> List[Tuple[int, int]]:
+        """Consolidate boundaries from overlapping window analyses.
         
         Args:
-            char_position: Character position in text
-            full_text: Full document text
+            window_analyses: List of window analysis results
+            total_pages: Total pages in document
             
         Returns:
-            Estimated page number (1-based)
+            List of (start_page, end_page) tuples
         """
-        # Rough estimation: 2000 characters per page
-        chars_per_page = 2000
-        return max(1, int(char_position / chars_per_page) + 1)
+        # Aggregate votes for each page
+        boundary_votes = defaultdict(list)
+        
+        for analysis in window_analyses:
+            for boundary in analysis.boundaries:
+                if boundary.is_boundary:
+                    boundary_votes[boundary.page_num].append({
+                        'confidence': boundary.confidence,
+                        'type': boundary.document_type,
+                        'reasoning': boundary.reasoning
+                    })
+        
+        # Determine final boundaries based on consensus
+        boundary_pages = []
+        
+        for page_num, votes in boundary_votes.items():
+            # Average confidence across all votes
+            avg_confidence = sum(v['confidence'] for v in votes) / len(votes)
+            
+            if avg_confidence >= self.confidence_threshold:
+                # Majority vote for document type
+                if any(v['type'] for v in votes):
+                    type_votes = Counter(v['type'] for v in votes if v['type'])
+                    if type_votes:
+                        most_common_type = type_votes.most_common(1)[0][0]
+                    else:
+                        most_common_type = None
+                else:
+                    most_common_type = None
+                    
+                boundary_pages.append(page_num)
+                logger.info(
+                    f"Page {page_num + 1} confirmed as boundary "
+                    f"(confidence: {avg_confidence:.2f}, type: {most_common_type})"
+                )
+        
+        # Always include page 0 as a boundary
+        if 0 not in boundary_pages:
+            boundary_pages.append(0)
+            
+        # Sort boundaries
+        boundary_pages.sort()
+        
+        # Convert to (start, end) tuples
+        boundaries = []
+        for i in range(len(boundary_pages)):
+            start = boundary_pages[i]
+            if i < len(boundary_pages) - 1:
+                end = boundary_pages[i + 1] - 1
+            else:
+                end = total_pages - 1
+            boundaries.append((start, end))
+            
+        return boundaries
     
-    def _determine_privacy_mode(self, text: str) -> PrivacyMode:
-        """Determine appropriate privacy mode for text.
+    def _validate_boundaries(
+        self, 
+        boundaries: List[Tuple[int, int]], 
+        pdf_doc: fitz.Document
+    ) -> List[Tuple[int, int]]:
+        """Validate and refine detected boundaries.
         
         Args:
-            text: Document text to analyze
+            boundaries: Initial boundary list
+            pdf_doc: PDF document
             
         Returns:
-            Privacy mode to use
+            Refined boundary list
         """
-        # Use router's sensitive content detection
-        has_sensitive = self.router.has_sensitive_content(text)
+        if len(boundaries) <= 1:
+            return boundaries
+            
+        refined = []
+        i = 0
         
-        if has_sensitive:
-            logger.debug("Sensitive content detected, using local processing")
-            return PrivacyMode.FULL_LOCAL
-        else:
-            return self.default_privacy_mode
+        while i < len(boundaries):
+            start, end = boundaries[i]
+            
+            # Check for very short documents that might be fragments
+            if end - start < 2 and i < len(boundaries) - 1:
+                # Analyze if this should be merged with next
+                should_merge = self._should_merge_fragments(
+                    pdf_doc, start, end, 
+                    boundaries[i + 1][0], boundaries[i + 1][1]
+                )
+                
+                if should_merge:
+                    # Merge with next document
+                    next_start, next_end = boundaries[i + 1]
+                    refined.append((start, next_end))
+                    i += 2
+                    continue
+                    
+            refined.append((start, end))
+            i += 1
+            
+        return refined
     
-    def get_status(self) -> Dict[str, Any]:
-        """Get detector status information.
+    def _should_merge_fragments(
+        self,
+        pdf_doc: fitz.Document,
+        start1: int, end1: int,
+        start2: int, end2: int
+    ) -> bool:
+        """Determine if two document fragments should be merged.
         
-        Returns:
-            Status dictionary
+        Uses LLM to analyze if documents are related.
         """
-        return {
-            "llm_available": self.router.get_status(),
-            "window_size": self.window_size,
-            "overlap_size": self.overlap_size,
-            "confidence_thresholds": {
-                "high": self.high_confidence_threshold,
-                "low": self.low_confidence_threshold
-            },
-            "cache_stats": {
-                "cache_size": len(self._boundary_cache),
-                "cache_max_size": self._cache_max_size
-            }
-        }
-    
-    def _create_cache_key(self, current_segment: str, next_segment: str, privacy_mode: PrivacyMode) -> str:
-        """Create a cache key for boundary validation."""
-        # Normalize segments to reduce cache misses from minor variations
-        current_normalized = " ".join(current_segment.split())[:200]  # First 200 chars
-        next_normalized = " ".join(next_segment.split())[:200]  # First 200 chars
-        
-        # Create hash of the key components
-        key_data = f"{current_normalized}|{next_normalized}|{privacy_mode}"
-        return hashlib.md5(key_data.encode()).hexdigest()
-    
-    def _cache_boundary_result(self, cache_key: str, parsed_result: Dict[str, Any]) -> None:
-        """Cache a boundary validation result."""
-        # Implement simple LRU eviction if cache is full
-        if len(self._boundary_cache) >= self._cache_max_size:
-            # Remove oldest entry (simple FIFO for now)
-            oldest_key = next(iter(self._boundary_cache))
-            del self._boundary_cache[oldest_key]
-            logger.debug("Cache full, evicted oldest entry")
-        
-        # Store the result
-        self._boundary_cache[cache_key] = {
-            "is_boundary": parsed_result["is_boundary"],
-            "confidence": parsed_result["confidence"],
-            "reasoning": parsed_result["reasoning"]
-        }
-        
-        logger.debug(f"Cached boundary result (cache size: {len(self._boundary_cache)})")
-    
-    def clear_cache(self) -> None:
-        """Clear the boundary validation cache."""
-        self._boundary_cache.clear()
-        logger.info("Boundary validation cache cleared")
-    
-    def get_cache_stats(self) -> Dict[str, Any]:
-        """Get cache statistics."""
-        return {
-            "cache_size": len(self._boundary_cache),
-            "cache_max_size": self._cache_max_size,
-            "cache_hit_potential": len(self._boundary_cache) / max(1, self._cache_max_size)
-        }
+        # Get text from both fragments
+        text1 = ""
+        for page_num in range(start1, end1 + 1):
+            text1 += self._get_page_text(pdf_doc[page_num], page_num)
+            
+        text2 = ""
+        for page_num in range(start2, min(start2 + 2, end2 + 1)):  # First 2 pages
+            text2 += self._get_page_text(pdf_doc[page_num], page_num)
+            
+        # Ask LLM if these should be merged
+        prompt = f"""Analyze if these two document fragments should be merged into one document:
 
+Fragment 1 ({end1 - start1 + 1} pages):
+{text1[:500]}
 
-# Global instance for use by other modules
-llm_boundary_detector = LLMBoundaryDetector()
+Fragment 2 (starts at page {start2 + 1}):
+{text2[:500]}
+
+Consider:
+1. Is Fragment 2 a continuation of Fragment 1?
+2. Do they share the same document type/purpose?
+3. Are there references between them?
+
+Return JSON: {{"should_merge": true/false, "confidence": 0.0-1.0, "reason": "..."}}"""
+
+        try:
+            response = self.llm_client.complete(prompt)
+            result = self._parse_llm_response(response)
+            return result.get('should_merge', False) and result.get('confidence', 0) > 0.7
+        except:
+            return False

@@ -17,6 +17,7 @@ from .models import (
     PDFProcessingRequest,
 )
 from .boundary_detector import BoundaryDetector
+from .improved_boundary_detector import ImprovedBoundaryDetector
 from .ocr_handler import OCRHandler
 from .improved_ocr_handler import ImprovedOCRHandler
 from .hybrid_boundary_detector import HybridBoundaryDetector, DetectionLevel
@@ -91,9 +92,9 @@ class PDFSplitter:
                         cache_dir=".boundary_cache"
                     )
             else:
-                # Use pattern-based detector only
+                # Use improved pattern-based detector
                 if self.boundary_detector is None:
-                    self.boundary_detector = BoundaryDetector(ocr_handler=self.ocr_handler)
+                    self.boundary_detector = ImprovedBoundaryDetector(ocr_handler=self.ocr_handler)
             
             if request.split_documents:
                 # Detect document boundaries

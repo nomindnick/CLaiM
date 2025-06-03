@@ -13,6 +13,7 @@ import fitz  # PyMuPDF
 from loguru import logger
 
 from .boundary_detector import BoundaryDetector
+from .improved_boundary_detector import ImprovedBoundaryDetector
 from .visual_boundary_detector import VisualBoundaryDetector, BoundaryScore, PageFeatures
 from .ocr_handler import OCRHandler
 from .layoutlm_boundary_detector import LayoutLMBoundaryDetector
@@ -59,8 +60,8 @@ class HybridBoundaryDetector:
         self.ocr_handler = ocr_handler
         self.privacy_mode = privacy_mode
         
-        # Initialize detectors
-        self.pattern_detector = BoundaryDetector(ocr_handler)
+        # Initialize detectors with improved boundary detector
+        self.pattern_detector = ImprovedBoundaryDetector(ocr_handler)
         self.visual_detector = None  # Lazy load
         self.llm_detector = None  # Lazy load for LLM analysis
         self.layoutlm_detector = None  # Lazy load for deep analysis
