@@ -9,6 +9,7 @@ export const DocumentBrowser: React.FC = () => {
   const [viewMode, setViewMode] = useState<ViewMode>('upload')
   const [uploadedDocuments, setUploadedDocuments] = useState<string[]>([])
 
+
   const handleUploadComplete = (documentId: string) => {
     setUploadedDocuments(prev => [...prev, documentId])
     // In a real app, you'd refetch the document list here
@@ -80,7 +81,7 @@ export const DocumentBrowser: React.FC = () => {
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-auto bg-gray-50">
+      <div className="flex-1 overflow-auto bg-gray-50" style={{ minHeight: '0' }}>
         {viewMode === 'upload' && (
           <div className="max-w-4xl mx-auto p-6">
             <div className="bg-white rounded-lg shadow-sm p-6">
@@ -139,7 +140,9 @@ export const DocumentBrowser: React.FC = () => {
           </div>
         )}
 
-        {viewMode === 'list' && <DocumentList />}
+        {viewMode === 'list' && (
+          <DocumentList />
+        )}
 
         {viewMode === 'grid' && (
           <div className="p-6">

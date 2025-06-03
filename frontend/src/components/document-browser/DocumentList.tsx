@@ -707,7 +707,7 @@ export const DocumentList: React.FC = () => {
                 </tr>
               ) : (
                 documents.map((doc) => {
-                  const badgeConfig = documentTypeBadgeConfig[doc.type]
+                  const badgeConfig = documentTypeBadgeConfig[doc.type] || documentTypeBadgeConfig[DocumentType.UNKNOWN]
                   const isDeleting = deletingDocuments.has(doc.id)
                   
                   return (

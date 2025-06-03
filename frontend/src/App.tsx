@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { Shield, ShieldAlert, Globe } from 'lucide-react'
 import axios from 'axios'
 import { DocumentBrowser } from './components/document-browser'
+import { ErrorBoundary } from './components/ErrorBoundary'
 
 type PrivacyMode = 'full_local' | 'hybrid_safe' | 'full_featured'
 
@@ -101,7 +102,7 @@ function App() {
         </div>
       </header>
 
-      <main className="flex-1 overflow-hidden">
+      <main className="flex-1 overflow-auto">
         {activeView === 'home' ? (
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
             <div className="bg-white rounded-lg shadow p-6">
@@ -141,7 +142,11 @@ function App() {
             </div>
           </div>
         ) : (
-          <DocumentBrowser />
+          <div className="h-full">
+            <ErrorBoundary>
+              <DocumentBrowser />
+            </ErrorBoundary>
+          </div>
         )}
       </main>
     </div>
