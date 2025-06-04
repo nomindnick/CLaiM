@@ -22,6 +22,8 @@ from .ocr_handler import OCRHandler
 from .improved_ocr_handler import ImprovedOCRHandler
 from .hybrid_boundary_detector import HybridBoundaryDetector, DetectionLevel
 from .hybrid_text_extractor import HybridTextExtractor, TextExtractionMethod
+from .llm_boundary_detector import LLMBoundaryDetector
+from .two_stage_detector import TwoStageDetector
 # Lazy import to avoid circular dependencies
 # from ..ai_classifier.classifier import document_classifier
 # from ..ai_classifier.models import ClassificationRequest
@@ -30,13 +32,17 @@ from .hybrid_text_extractor import HybridTextExtractor, TextExtractionMethod
 class PDFSplitter:
     """Splits large PDF files into individual logical documents."""
     
-    def __init__(self, use_visual_detection: bool = True, use_hybrid_text_extraction: bool = True):
+    def __init__(self, use_visual_detection: bool = True, use_hybrid_text_extraction: bool = True, use_llm_detection: bool = False, use_two_stage_detection: bool = False):
         self.ocr_handler = None  # Lazy initialization
         self.boundary_detector = None  # Will be initialized when OCR handler is ready
         self.hybrid_detector = None  # Hybrid boundary detector
+        self.llm_detector = None  # LLM boundary detector
+        self.two_stage_detector = None  # Two-stage optimized detector
         self.text_extractor = None  # Hybrid text extractor
         self.use_visual_detection = use_visual_detection
         self.use_hybrid_text_extraction = use_hybrid_text_extraction
+        self.use_llm_detection = use_llm_detection
+        self.use_two_stage_detection = use_two_stage_detection
     
     def process_pdf(self, request: PDFProcessingRequest, progress_callback=None) -> ProcessingResult:
         """Process a PDF file and extract individual documents.
@@ -82,8 +88,38 @@ class PDFSplitter:
                     cache_dir=".ocr_cache"  # Shared cache directory
                 )
             
-            # Initialize boundary detector
-            if self.use_visual_detection:
+            # Initialize boundary detector based on configuration
+            if self.use_two_stage_detection:
+                # Use optimized two-stage detector for best performance
+                if self.two_stage_detector is None:
+                    self.two_stage_detector = TwoStageDetector(
+                        fast_model="phi3:mini",
+                        deep_model="llama3:8b-instruct-q4_0",
+                        ocr_handler=self.ocr_handler,
+                        window_size=3,
+                        confidence_threshold=0.7,
+                        batch_size=5,
+                        keep_alive_minutes=10
+                    )
+            elif self.use_llm_detection:
+                # Use LLM-based detector for highest accuracy
+                if self.llm_detector is None:
+                    # Import LLM client conditionally
+                    try:
+                        from ..llm_client.ollama_client import OllamaClient
+                        llm_client = OllamaClient(model="llama3:8b-instruct-q4_0")
+                    except Exception as e:
+                        logger.warning(f"Failed to initialize LLM client: {e}, falling back to default")
+                        llm_client = None
+                    
+                    self.llm_detector = LLMBoundaryDetector(
+                        llm_client=llm_client,
+                        ocr_handler=self.ocr_handler,
+                        window_size=3,
+                        overlap=1,
+                        confidence_threshold=0.7
+                    )
+            elif self.use_visual_detection:
                 # Use hybrid detector for better accuracy
                 if self.hybrid_detector is None:
                     self.hybrid_detector = HybridBoundaryDetector(
@@ -101,7 +137,21 @@ class PDFSplitter:
                 if progress_callback:
                     progress_callback(1, result.total_pages, "Detecting document boundaries")
                 
-                if self.use_visual_detection:
+                if self.use_two_stage_detection:
+                    # Use optimized two-stage detection
+                    boundaries = self.two_stage_detector.detect_boundaries(pdf_doc)
+                    
+                    # Log detection results
+                    logger.info(f"Two-stage detector found {len(boundaries)} documents")
+                    
+                elif self.use_llm_detection:
+                    # Use pure LLM detection
+                    boundaries = self.llm_detector.detect_boundaries(pdf_doc)
+                    
+                    # Log detection results
+                    logger.info(f"LLM detector found {len(boundaries)} documents")
+                    
+                elif self.use_visual_detection:
                     # Use hybrid detection with LLM validation for enhanced accuracy
                     max_level = DetectionLevel.LLM  # Default to LLM-enhanced detection
                     

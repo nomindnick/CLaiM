@@ -17,7 +17,7 @@ from .improved_boundary_detector import ImprovedBoundaryDetector
 from .visual_boundary_detector import VisualBoundaryDetector, BoundaryScore, PageFeatures
 from .ocr_handler import OCRHandler
 from .layoutlm_boundary_detector import LayoutLMBoundaryDetector
-from .llm_boundary_detector import LLMBoundaryDetector, BoundaryCandidate
+from .llm_boundary_detector import LLMBoundaryDetector
 from ..llm_client.router import PrivacyMode
 
 

@@ -7,7 +7,7 @@ from typing import Dict, Any, Optional
 import httpx
 from loguru import logger
 
-from .base_client import LLMClient, LLMRequest, LLMResponse, LLMError, LLMServiceUnavailable, LLMTimeout
+from .base_client import LLMClient, LLMRequest, LLMResponse, LLMError, LLMServiceUnavailable, LLMTimeout, LLMTaskType
 
 
 class OllamaClient(LLMClient):
@@ -223,3 +223,24 @@ class OllamaClient(LLMClient):
         except Exception as e:
             logger.warning(f"Error unloading model: {e}")
             return False
+    
+    def complete(self, prompt: str, **kwargs) -> str:
+        """Simple synchronous completion method for compatibility.
+        
+        Args:
+            prompt: Text prompt for completion
+            **kwargs: Additional parameters
+            
+        Returns:
+            Generated text response
+        """
+        request = LLMRequest(
+            prompt=prompt,
+            task_type=LLMTaskType.GENERAL,
+            temperature=kwargs.get('temperature', self.default_temperature),
+            max_tokens=kwargs.get('max_tokens', self.default_max_tokens),
+            timeout=kwargs.get('timeout', self.default_timeout)
+        )
+        
+        response = self.process_sync(request)
+        return response.content

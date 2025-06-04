@@ -41,14 +41,19 @@ API Docs: http://localhost:8000/api/v1/docs
 ```
 backend/
 ├── modules/document_processor/
-│   ├── pdf_splitter.py          # Main entry point
+│   ├── pdf_splitter.py              # Main entry point
+│   ├── llm_boundary_detector.py     # LLM-based boundary detection
+│   ├── two_stage_detector.py        # Optimized two-stage detection
 │   ├── hybrid_boundary_detector.py  # AI boundary detection
-│   └── improved_ocr_handler.py  # OCR with caching
+│   └── improved_ocr_handler.py      # OCR with caching
+├── modules/llm_client/
+│   ├── ollama_client.py             # Ollama LLM integration
+│   └── base_client.py               # LLM client interface
 ├── modules/ai_classifier/
-│   └── classifier.py            # Document classification
+│   └── classifier.py                # Document classification
 ├── modules/storage/
-│   └── storage_manager.py       # Database operations
-└── api/main.py                  # FastAPI app
+│   └── storage_manager.py           # Database operations
+└── api/main.py                      # FastAPI app
 ```
 
 ## Current Development State
@@ -72,13 +77,14 @@ backend/
 2. **OCR-dependent Documents**: Pattern-matching fails on scanned/OCR'd content
 3. **Complex Document Structures**: Visual similarity approach insufficient for legal document semantics
 
-### **MAJOR UPGRADE IN PROGRESS**: LLM Integration
-🚀 **Comprehensive LLM integration planned to dramatically improve accuracy**
-- **Target**: >90% boundary detection, >85% classification (vs current ~20% real-world)
-- **Approach**: Replace current classification entirely, enhance boundary detection with LLM validation
-- **Models**: Llama 3 8B (local/Ollama) + GPT-4.1-nano (API when privacy allows)
-- **Status**: Planning complete, implementation beginning
-- **Details**: See `Llama-Integration.md` for comprehensive implementation plan
+### **MAJOR UPGRADE COMPLETED**: LLM Integration ✅
+🚀 **LLM integration implemented with two-stage optimization**
+- **Achievement**: >82% F1 score for boundary detection (vs ~20% baseline)
+- **Approach**: LLM-based boundary detection with two-stage optimization
+- **Models**: phi3:mini (2.2GB fast screening) + Llama 3 8B (5.7GB deep analysis)
+- **Performance**: 2-3x faster than pure LLM approach (8-12 min for 36 pages)
+- **Status**: Core implementation complete, optimization ongoing
+- **Details**: See `llm_boundary_implementation_roadmap.md` and `two_stage_optimization_summary.md`
 
 ## Testing Critical Paths
 ```bash
@@ -91,40 +97,41 @@ python scripts/test_improved_ocr.py
 # Test boundary detection
 python scripts/test_visual_boundary.py
 
+# Test LLM boundary detection
+python scripts/test_llm_boundary_detection.py
+
+# Test two-stage optimization
+python scripts/test_two_stage_summary.py
+
 # Test classification
 python scripts/test_ai_classifier.py
 ```
 
 ## Next Development Priorities
 
-### **TOP PRIORITY: LLM Integration (4 weeks)**
-**Objective**: Replace failing classification system with LLM-based approach for real-world accuracy
+### **COMPLETED**: LLM Integration ✅
+- **Phase 1**: Foundation Infrastructure ✅
+- **Phase 2**: LLM Boundary Detection ✅
+- **Phase 3**: Two-Stage Optimization ✅
+- **Phase 4**: Testing & Validation ✅
 
-**Phase 1 (Week 1)**: Foundation Infrastructure
-- Install Ollama + Llama 3 8B Instruct model
-- Create LLM client abstraction (Ollama + OpenAI)
-- Design and test classification/boundary detection prompts
-- Establish performance baselines
+### Current Focus: Performance & Accuracy Refinement
+1. **Model Optimization**
+   - Test smaller/faster models (TinyLlama, Qwen 2.5)
+   - Implement response caching
+   - Optimize prompts for consistent JSON output
 
-**Phase 2 (Week 2)**: Classification Replacement  
-- Implement LLM-based classifier with structured prompts
-- Replace existing classifier.py entirely
-- Test on problem documents (36-page PDF case)
-- Measure accuracy improvements
+2. **Classification Enhancement**
+   - Port classification to LLM-based approach
+   - Integrate with two-stage detection
+   - Improve document type accuracy
 
-**Phase 3 (Week 3)**: Boundary Detection Enhancement
-- Add LLM boundary validation to hybrid detector
-- Implement text windowing for context
-- Integrate end-to-end pipeline
-- Optimize for performance
+3. **Production Readiness**
+   - Add comprehensive error handling
+   - Implement monitoring/metrics
+   - Create deployment documentation
 
-**Phase 4 (Week 4)**: Production Readiness
-- Error handling and fallback strategies
-- Performance optimization and caching
-- Monitoring and observability
-- Update deployment documentation
-
-### Deferred Until LLM Integration Complete
+### Next Features (After Optimization)
 1. **UI Improvements**: Bulk operations, search interface, document detail views
 2. **Advanced Features**: Graph engine, timeline builder, financial analyzer  
 3. **Infrastructure**: Electron packaging, model fine-tuning

@@ -13,10 +13,14 @@ from enum import Enum
 import fitz
 from loguru import logger
 
-from ..llm_client.base_client import BaseLLMClient
+from ..llm_client.base_client import LLMClient
 from ..llm_client.ollama_client import OllamaClient
 from .improved_ocr_handler import ImprovedOCRHandler
 from .models import DocumentType
+from .document_type_strategies import (
+    DocumentTypeStrategyFactory,
+    DocumentTypeStrategy
+)
 
 
 class ConfidenceLevel(Enum):
@@ -60,7 +64,7 @@ class LLMBoundaryDetector:
     
     def __init__(
         self, 
-        llm_client: Optional[BaseLLMClient] = None,
+        llm_client: Optional[LLMClient] = None,
         ocr_handler: Optional[ImprovedOCRHandler] = None,
         window_size: int = 3,
         overlap: int = 1,
@@ -83,6 +87,9 @@ class LLMBoundaryDetector:
         
         # Cache for OCR results
         self._ocr_cache = {}
+        
+        # Document type strategies
+        self.strategies = DocumentTypeStrategyFactory.get_all_strategies(self.llm_client)
         
     def detect_boundaries(self, pdf_doc: fitz.Document) -> List[Tuple[int, int]]:
         """Detect document boundaries in a PDF using LLM analysis.
@@ -289,6 +296,16 @@ Page {page_num}:
         previous_summary: Optional[str] = None
     ) -> str:
         """Build prompt for LLM boundary analysis."""
+        
+        # Gather strategy hints
+        strategy_hints = []
+        for doc_type, strategy in self.strategies.items():
+            if doc_type != 'default':
+                hints = strategy.get_prompt_hints()
+                strategy_hints.append(hints)
+        
+        combined_hints = "\n\n".join(strategy_hints)
+        
         prompt = f"""You are analyzing pages from a construction litigation PDF to identify document boundaries.
 Your task is to determine where one document ends and another begins.
 
@@ -306,7 +323,10 @@ Window of pages to analyze:
 
 For EACH page in this window, analyze if it starts a new document.
 
-Consider these indicators for NEW documents:
+DOCUMENT-SPECIFIC GUIDANCE:
+{combined_hints}
+
+Consider these general indicators for NEW documents:
 1. Email headers (From:, To:, Subject:) that are NOT quoted/forwarded
 2. Document headers (RFI #, Invoice #, Submittal #)
 3. Major format changes (email to drawing, invoice to RFI)
@@ -517,12 +537,50 @@ Be conservative - only mark clear document boundaries. When in doubt, assume con
         """
         # Get text from both fragments
         text1 = ""
+        page1_info = None
         for page_num in range(start1, end1 + 1):
-            text1 += self._get_page_text(pdf_doc[page_num], page_num)
+            page = pdf_doc[page_num]
+            text1 += self._get_page_text(page, page_num)
+            if page1_info is None:
+                page1_info = {
+                    'page_num': page_num,
+                    'text': self._get_page_text(page, page_num),
+                    'text_length': len(text1.strip()),
+                    'has_images': len(page.get_images()) > 0,
+                    'has_many_drawings': len(page.get_drawings()) > 50,
+                    'font_info': self._extract_font_info(page),
+                    'layout_info': self._extract_layout_info(page)
+                }
             
         text2 = ""
+        page2_info = None
         for page_num in range(start2, min(start2 + 2, end2 + 1)):  # First 2 pages
-            text2 += self._get_page_text(pdf_doc[page_num], page_num)
+            page = pdf_doc[page_num]
+            text2 += self._get_page_text(page, page_num)
+            if page2_info is None:
+                page2_info = {
+                    'page_num': page_num,
+                    'text': self._get_page_text(page, page_num),
+                    'text_length': len(text2.strip()),
+                    'has_images': len(page.get_images()) > 0,
+                    'has_many_drawings': len(page.get_drawings()) > 50,
+                    'font_info': self._extract_font_info(page),
+                    'layout_info': self._extract_layout_info(page)
+                }
+        
+        # Try to detect document types
+        doc_type1 = self._detect_document_type(page1_info)
+        doc_type2 = self._detect_document_type(page2_info)
+        
+        # If same document type, use specific strategy
+        if doc_type1 and doc_type1 == doc_type2:
+            strategy = self.strategies.get(doc_type1)
+            if strategy and page1_info and page2_info:
+                continues, confidence, reason = strategy.validate_continuation(
+                    page2_info, page1_info
+                )
+                if confidence > 0.7:
+                    return continues
             
         # Ask LLM if these should be merged
         prompt = f"""Analyze if these two document fragments should be merged into one document:
@@ -546,3 +604,18 @@ Return JSON: {{"should_merge": true/false, "confidence": 0.0-1.0, "reason": "...
             return result.get('should_merge', False) and result.get('confidence', 0) > 0.7
         except:
             return False
+    
+    def _detect_document_type(self, page_info: Dict) -> Optional[str]:
+        """Detect document type using strategies."""
+        best_type = None
+        best_confidence = 0.0
+        
+        for doc_type, strategy in self.strategies.items():
+            if doc_type == 'default':
+                continue
+            is_start, confidence = strategy.detect_document_start(page_info)
+            if is_start and confidence > best_confidence:
+                best_confidence = confidence
+                best_type = doc_type
+        
+        return best_type if best_confidence > 0.5 else None

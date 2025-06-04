@@ -22,7 +22,7 @@ class LLMRequest:
     model_params: Optional[Dict[str, Any]] = None
     max_tokens: Optional[int] = None
     temperature: float = 0.1
-    timeout: int = 30
+    timeout: int = 300  # 5 minutes
 
 
 @dataclass
