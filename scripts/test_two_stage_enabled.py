@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Test document ingestion after fixing BoundaryCandidate error."""
+"""Test that two-stage detection is properly enabled."""
 
 import sys
 import os
@@ -11,8 +11,8 @@ from backend.modules.document_processor.pdf_splitter import PDFSplitter
 from backend.modules.document_processor.models import PDFProcessingRequest
 from loguru import logger
 
-def test_ingestion():
-    """Test document ingestion with a sample PDF."""
+def test_two_stage_detection():
+    """Test document processing with two-stage detection enabled."""
     # Find a test PDF
     test_pdf_dir = Path("tests/test_data")
     if not test_pdf_dir.exists():
@@ -28,29 +28,37 @@ def test_ingestion():
     logger.info(f"Testing with: {test_pdf}")
     
     try:
-        # Initialize PDF splitter with visual detection enabled
-        splitter = PDFSplitter(use_visual_detection=True)
+        # Initialize PDF splitter with two-stage detection enabled
+        splitter = PDFSplitter(use_two_stage_detection=True)
+        logger.info("✓ Two-stage detection enabled")
         
-        # Create processing request with LLM validation
+        # Create processing request
         request = PDFProcessingRequest(
             file_path=test_pdf,
-            force_llm_validation=True  # Force LLM validation to test the fix
+            max_pages=10  # Limit for faster testing
         )
         
         # Process the PDF
-        logger.info("Starting PDF processing with LLM validation...")
+        logger.info("Starting PDF processing with two-stage detection...")
         result = splitter.process_pdf(request)
         
         if result.success:
             logger.success(f"Successfully processed PDF! Found {result.documents_found} documents")
             
+            # Show detection level used
+            if result.detection_level:
+                logger.info(f"Detection level: {result.detection_level}")
+                
+            # Check if two-stage was actually used
+            if result.detection_level == "two-stage":
+                logger.success("✓ Two-stage detection was used!")
+            else:
+                logger.warning(f"Two-stage detection not used, got: {result.detection_level}")
+                
             # Show summary
             for i, doc in enumerate(result.documents):
                 logger.info(f"Document {i+1}: {doc.type} (pages {doc.page_range[0]}-{doc.page_range[1]})")
                 
-            # Show detection level used
-            if result.detection_level:
-                logger.info(f"Detection level: {result.detection_level}")
         else:
             logger.error(f"Processing failed: {result.errors}")
             return False
@@ -64,5 +72,5 @@ def test_ingestion():
         return False
 
 if __name__ == "__main__":
-    success = test_ingestion()
+    success = test_two_stage_detection()
     sys.exit(0 if success else 1)

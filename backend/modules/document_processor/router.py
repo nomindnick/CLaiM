@@ -23,7 +23,12 @@ router = APIRouter(
 )
 
 # Initialize services
-pdf_splitter = PDFSplitter()
+# Enable two-stage detection for optimal performance with phi3:mini screening
+# This uses phi3:mini for fast screening and llama3:8b for detailed analysis
+pdf_splitter = PDFSplitter(
+    use_visual_detection=False,  # Disable visual detection to use two-stage
+    use_two_stage_detection=True  # Enable optimized two-stage detection
+)
 storage_manager = StorageManager()
 metadata_extractor = MetadataExtractor()
 

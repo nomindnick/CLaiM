@@ -21,6 +21,15 @@ from .llm_boundary_detector import LLMBoundaryDetector
 from ..llm_client.router import PrivacyMode
 
 
+@dataclass
+class BoundaryCandidate:
+    """Represents a candidate document boundary."""
+    page_number: int
+    position: int
+    confidence: float
+    method: str
+
+
 class DetectionLevel(Enum):
     """Detection levels for progressive analysis."""
     HEURISTIC = 1  # Fast pattern matching
@@ -233,67 +242,72 @@ class HybridBoundaryDetector:
         """
         # Lazy load LLM detector
         if self.llm_detector is None:
-            self.llm_detector = LLMBoundaryDetector(
-                default_privacy_mode=self.privacy_mode
-            )
+            self.llm_detector = LLMBoundaryDetector()
         
-        # Extract full text from PDF and track page positions
-        full_text = ""
-        page_positions = {}  # page_num -> char_position
+        # Use LLM detector to detect boundaries from scratch
+        # This gives us a fresh perspective to validate against
+        llm_boundaries = self.llm_detector.detect_boundaries(pdf_doc)
         
-        for page_num in range(pdf_doc.page_count):
-            page_positions[page_num + 1] = len(full_text)  # Store position of page start
-            page_text = pdf_doc[page_num].get_text()
-            full_text += f"\n--- Page {page_num + 1} ---\n" + page_text
+        # Compare LLM results with current results
+        # If LLM agrees with most boundaries, keep them
+        # Otherwise, trust LLM more
         
-        # Convert boundaries to boundary candidates
-        boundary_candidates = []
-        for start_page, end_page in current_result.boundaries:
-            # Get actual character position for the page boundary
-            char_position = page_positions.get(start_page, 0)
-            
-            confidence = current_result.confidence_scores.get(start_page, 0.5)
-            method = current_result.detection_level.name.lower()
-            
-            candidate = BoundaryCandidate(
-                page_number=start_page,
-                position=char_position,
-                confidence=confidence,
-                method=method
-            )
-            boundary_candidates.append(candidate)
+        current_set = set(current_result.boundaries)
+        llm_set = set(llm_boundaries)
         
-        # Run LLM validation
-        validated_candidates = self.llm_detector.validate_boundaries(
-            full_text=full_text,
-            boundary_candidates=boundary_candidates,
-            privacy_mode=self.privacy_mode
+        # Calculate overlap
+        overlap = current_set & llm_set
+        only_current = current_set - llm_set
+        only_llm = llm_set - current_set
+        
+        logger.info(
+            f"LLM validation comparison: {len(overlap)} common, "
+            f"{len(only_current)} current-only, {len(only_llm)} LLM-only"
         )
         
-        # Convert validated candidates back to boundaries
-        validated_boundaries = []
-        updated_confidence_scores = {}
-        
-        for candidate in validated_candidates:
-            # Convert back to page-based boundaries
-            start_page = candidate.page_number
+        # If good agreement (>70%), merge conservatively
+        agreement_ratio = len(overlap) / max(len(current_set), 1)
+        if agreement_ratio > 0.7:
+            # Good agreement, merge with preference to LLM
+            validated_boundaries = list(overlap)
             
-            # Find end page (next boundary or end of document)
-            end_page = pdf_doc.page_count - 1
-            for other_candidate in validated_candidates:
-                if other_candidate.page_number > start_page:
-                    end_page = other_candidate.page_number - 1
-                    break
+            # Add high-confidence boundaries from current result
+            for boundary in only_current:
+                start, end = boundary
+                avg_conf = sum(
+                    current_result.confidence_scores.get(p, 0) 
+                    for p in range(start, end + 1)
+                ) / max(1, end - start + 1)
+                if avg_conf > 0.8:
+                    validated_boundaries.append(boundary)
             
-            if start_page <= end_page:
-                validated_boundaries.append((start_page, end_page))
-                
-                # Update confidence scores for all pages in this document
-                for page_num in range(start_page, end_page + 1):
-                    updated_confidence_scores[page_num] = candidate.confidence
+            # Add all LLM boundaries (trust LLM more)
+            validated_boundaries.extend(only_llm)
+        else:
+            # Poor agreement, trust LLM more
+            logger.info("Low agreement with current detection, trusting LLM results more")
+            validated_boundaries = llm_boundaries
         
-        # Sort boundaries
+        # Sort and clean up
         validated_boundaries = sorted(validated_boundaries)
+        validated_boundaries = self._cleanup_overlapping_boundaries(validated_boundaries)
+        
+        # Update confidence scores (higher for LLM-validated boundaries)
+        updated_confidence_scores = {}
+        for start, end in validated_boundaries:
+            is_llm_boundary = (start, end) in llm_set
+            is_overlap = (start, end) in overlap
+            
+            for page_num in range(start, end + 1):
+                if is_overlap:
+                    # High confidence for agreed boundaries
+                    updated_confidence_scores[page_num] = 0.9
+                elif is_llm_boundary:
+                    # Good confidence for LLM-only
+                    updated_confidence_scores[page_num] = 0.8
+                else:
+                    # Moderate confidence for current-only that passed threshold
+                    updated_confidence_scores[page_num] = 0.7
         
         logger.info(
             f"LLM validation: {len(current_result.boundaries)} → {len(validated_boundaries)} boundaries"
